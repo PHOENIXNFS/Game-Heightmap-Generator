@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrain Heightmap Generator</title>
+<link rel="stylesheet" href="/style.css?v=2">
+</head>
+<body>
+<header id="topbar">
+  <span id="app-title">Terrain Heightmap Generator</span>
+  <label class="hdr-field">Seed <input type="number" id="seed" value="1337" min="0" step="1"></label>
+  <button id="seed-random" title="Randomize seed">&#x21bb;</button>
+  <label class="hdr-field">Preview res
+    <select id="preview-res">
+      <option value="256">256</option>
+      <option value="512" selected>512</option>
+      <option value="1024">1024</option>
+    </select>
+  </label>
+  <button id="generate-full" class="primary">Generate Full Res</button>
+  <div class="spacer"></div>
+  <button id="export-png16" disabled>PNG16</button>
+  <button id="export-raw16" disabled>RAW r16</button>
+  <button id="export-exr" disabled>EXR</button>
+  <button id="save-cfg">Save</button>
+  <button id="load-cfg">Load</button>
+  <input type="file" id="load-cfg-file" accept=".json" hidden>
+</header>
+
+<main id="layout">
+  <aside id="sidebar">
+    <section class="panel">
+      <h2>MAP</h2>
+      <div class="row">
+        <label>Mode
+          <select id="mode">
+            <option value="islands" selected>Islands</option>
+            <option value="landscape">Landscape</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label>W <input type="number" id="map-w" value="1024" min="64" max="8192" step="1"></label>
+        <label>H <input type="number" id="map-h" value="1024" min="64" max="8192" step="1"></label>
+        <label class="chk"><input type="checkbox" id="wh-linked" checked> linked</label>
+      </div>
+      <div class="row presets" id="ue-presets">
+        <span>UE:</span>
+        <button data-w="505" data-h="505">505</button>
+        <button data-w="1009" data-h="1009">1009</button>
+        <button data-w="1017" data-h="1017">1017</button>
+        <button data-w="2017" data-h="2017">2017</button>
+        <button data-w="4033" data-h="4033">4033</button>
+        <button data-w="8129" data-h="8129">8129</button>
+      </div>
+      <div class="row slider-row" id="sea-level-row">
+        <label for="sea-level">Sea level</label>
+        <input type="range" id="sea-level" min="0" max="1" step="0.005" value="0.06">
+        <output id="sea-level-val">0.060</output>
+      </div>
+    </section>
+
+    <section class="panel" id="islands-panel">
+      <h2>ISLANDS <button id="island-add" class="small">+ add</button></h2>
+      <div id="island-list"></div>
+    </section>
+
+    <section class="panel">
+      <h2>TERRAIN NOISE <button id="noise-reset" class="small">&#x21bb; reset</button></h2>
+      <div class="row slider-row">
+        <label for="noise-scale">Feature size</label>
+        <input type="range" id="noise-scale" min="0.5" max="20" step="0.1" value="2.5">
+        <output id="noise-scale-val">2.5</output>
+      </div>
+      <div class="row slider-row">
+        <label for="detail-amp">Terrain detail</label>
+        <input type="range" id="detail-amp" min="0" max="1" step="0.01" value="0.4">
+        <output id="detail-amp-val">0.40</output>
+      </div>
+      <div class="row slider-row">
+        <label for="coast-warp">Coast roughness</label>
+        <input type="range" id="coast-warp" min="0" max="1" step="0.01" value="0.35">
+        <output id="coast-warp-val">0.35</output>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="chk-head"><label class="chk"><input type="checkbox" id="erosion-enabled" checked> HYDRAULIC EROSION</label></h2>
+      <div id="erosion-controls">
+        <div class="row slider-row">
+          <label for="erosion-droplets">Droplets</label>
+          <input type="range" id="erosion-droplets" min="0" max="400000" step="5000" value="60000">
+          <output id="erosion-droplets-val">60000</output>
+        </div>
+        <div class="row slider-row">
+          <label for="erosion-steps">Steps</label>
+          <input type="range" id="erosion-steps" min="0" max="120" step="1" value="30">
+          <output id="erosion-steps-val">30</output>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>STATS</h2>
+      <div id="stats-line">no preview yet</div>
+      <div id="preview-ms"></div>
+    </section>
+  </aside>
+
+  <section id="panes">
+    <div class="pane">
+      <div class="pane-title">2D PREVIEW <span class="hint">drag handles &middot; orange dot rotates &middot; double-click to add</span></div>
+      <div id="pane2d-wrap"><canvas id="pane2d"></canvas><canvas id="pane2d-overlay"></canvas></div>
+    </div>
+    <div class="pane">
+      <div class="pane-title">3D PREVIEW <span class="hint">left-drag orbit &middot; wheel zoom &middot; right-drag pan &middot; double-click resets view</span></div>
+      <div id="pane3d-wrap"><canvas id="pane3d"></canvas></div>
+    </div>
+  </section>
+</main>
+
+<script src="/preview2d.js?v=6"></script>
+<script src="/preview3d.js?v=3"></script>
+<script src="/app.js?v=5"></script>
+</body>
+</html>
