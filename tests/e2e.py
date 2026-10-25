@@ -41,9 +41,9 @@ def check(name, cond, detail=""):
 
 
 ISLANDS = [
-    {"cx": 0.32, "cy": 0.35, "radius": 0.26, "angle": 0.7},
-    {"cx": 0.62, "cy": 0.58, "radius": 0.22, "angle": 2.1},
-    {"cx": 0.82, "cy": 0.22, "radius": 0.11, "angle": 5.0},
+    {"cx": 0.32, "cy": 0.35, "radius": 0.26, "angle": 0.7, "land_height": 0.30},
+    {"cx": 0.62, "cy": 0.58, "radius": 0.22, "angle": 2.1, "land_height": 0.30},
+    {"cx": 0.82, "cy": 0.22, "radius": 0.11, "angle": 5.0, "land_height": 0.30},
 ]
 
 CONFIG = {
@@ -62,6 +62,7 @@ def main():
     print("== static + meta ==")
     st, h, raw = req("/")
     check("index.html served", st == 200 and b"Terrain Heightmap" in raw)
+    check("full-res dropdown present", b'id="full-res"' in raw and b'id="preview-res"' in raw)
     for asset in ("/style.css", "/app.js", "/preview2d.js", "/preview3d.js"):
         st, _, raw = req(asset)
         check(f"{asset} served", st == 200 and len(raw) > 500)
@@ -71,6 +72,9 @@ def main():
     check("defaults", st == 200 and "config" in defaults and "islands" in defaults["config"])
     check("defaults island angle is a number", isinstance(isl0.get("angle"), (int, float)))
     check("defaults island has its own seed", isinstance(isl0.get("seed"), int) and isl0["seed"] >= 0)
+    check("defaults island has elevation fields",
+          all(isinstance(isl0.get(k), (int, float))
+              for k in ("land_height", "mountain_height", "mountain_coverage")))
     check("defaults has no elevation field", "elevation" not in isl0)
     dc = defaults["config"]
     check("defaults smoothing block", isinstance(dc.get("smoothing"), dict)
@@ -103,6 +107,9 @@ def main():
     prev2 = json.loads(raw2)
     st, _, raw_b = req(f"/api/heights/{prev2['id']}")
     check("deterministic seeds", raw_b == raw)
+
+    st, _, _ = req("/api/preview?size=2048", {"config": CONFIG}, timeout=240)
+    check("preview capped at 1024", st == 422, f"status {st}")
 
     print("== island controls ==")
     # rotation changes shape
@@ -210,7 +217,105 @@ def main():
     ys = np.arange(64, 128, dtype=np.float64)[:, None] * np.ones((1, 64))
     check("fbm deterministic", float(np.abs(fbm(xs, ys, 4242) - fbm(xs, ys, 4242)).max()) == 0.0)
 
-    print("== smoothing / ridges ==")
+    print("== flat land + sparse mountains ==")
+
+    def land_stats(**overrides):
+        cfg = dict(CONFIG, smoothing=no_post, erosion=no_ero)
+        cfg.update(overrides)
+        arr = preview_arr(cfg)
+        land = arr[arr > cfg.get("sea_level", CONFIG["sea_level"])]
+        if land.size == 0:
+            return 0.0, 0.0, 0.0
+        return (float(land.size) / arr.size,
+                float((land > 0.45).mean()),
+                float(land.max()))
+
+    isl1 = ISLANDS[0]
+    # plain: with no mountains and no ripple the lowland sits at land_height
+    flat = preview_arr(dict(CONFIG, smoothing=no_post, erosion=no_ero,
+                            noise={**CONFIG["noise"], "detail_amp": 0.0},
+                            islands=[dict(isl1, mountain_height=0.0,
+                                          mountain_coverage=0.0)]))
+    flat_land = flat[flat > CONFIG["sea_level"]]
+    on_plain = (float((np.abs(flat_land - isl1["land_height"]) < 1e-3).mean())
+                if flat_land.size else 0.0)
+    check("lowland is flat (no mountains, no ripple)", on_plain >= 0.6,
+          f"{on_plain:.2f} of land on the plain")
+
+    # default map: high ground is a minority of the land, not a dome
+    frac_def, hi_def, max_def = land_stats()
+    check("mountains are localized", 0.005 < hi_def < 0.45,
+          f"land {frac_def:.3f}, high {hi_def:.3f}")
+    check("peaks rise well above the plain", max_def > isl1["land_height"] + 0.15,
+          f"max {max_def:.3f}")
+
+    # coverage: more of the island clears the mountain threshold
+    _, hi_sparse, _ = land_stats(islands=[dict(isl1, mountain_coverage=0.15)])
+    _, hi_dense, _ = land_stats(islands=[dict(isl1, mountain_coverage=0.60)])
+    check("coverage widens high ground", hi_dense > hi_sparse,
+          f"0.15 -> {hi_sparse:.3f}, 0.60 -> {hi_dense:.3f}")
+
+    # peak height: taller mountains, same footprint
+    _, _, max_low = land_stats(islands=[dict(isl1, mountain_height=0.05)])
+    _, _, max_tall = land_stats(islands=[dict(isl1, mountain_height=0.55)])
+    check("mountain height raises peaks", max_tall > max_low + 0.2,
+          f"{max_low:.3f} -> {max_tall:.3f}")
+
+    # absolute heights: water above the plain drowns it
+    flooded, _, _ = land_stats(sea_level=0.7,
+                               islands=[dict(isl1, mountain_height=0.0,
+                                             mountain_coverage=0.0)])
+    check("sea level above the plain floods it", flooded == 0.0, f"land {flooded}")
+
+    # the plain rolls and falls toward the coast instead of being a plate
+    rolled = preview_arr(dict(CONFIG, smoothing=no_post, erosion=no_ero,
+                              islands=[dict(isl1, mountain_height=0.0,
+                                            mountain_coverage=0.0)]))
+    rh, rw = rolled.shape
+    gy, gx = np.mgrid[0:rh, 0:rw]
+    rr = np.hypot(gx - isl1["cx"] * rw, gy - isl1["cy"] * rh)
+    rr /= isl1["radius"] * min(rw, rh)
+    rland = rolled > CONFIG["sea_level"]
+    # mid-slope vs the outermost plain: the very centre is not compared
+    # because the rolling noise can put a hollow there
+    mid = rland & (rr > 0.30) & (rr < 0.55)
+    outer = rland & (rr > 0.75) & (rr < 0.88)
+    d_in = float(rolled[mid].mean()) if mid.any() else 0.0
+    d_out = float(rolled[outer].mean()) if outer.any() else 0.0
+    check("plain falls gently toward the coast", d_in > d_out + 0.005,
+          f"mid {d_in:.3f} -> outer {d_out:.3f}")
+    check("plain still reads flat", abs(d_out - isl1["land_height"]) < 0.30 * isl1["land_height"],
+          f"outer {d_out:.3f} vs plain {isl1['land_height']:.3f}")
+
+    # mountain size: same coverage and peak height, broader massifs.
+    # Averaged over a few seeds: with one huge massif a single island
+    # may sit mostly on a flank, so one seed is not representative.
+    def patch_stats(size, seed):
+        arr = preview_arr(dict(CONFIG, seed=seed, smoothing=no_post,
+                               erosion=no_ero,
+                               islands=[dict(isl1, mountain_coverage=0.30,
+                                             mountain_size=size)]))
+        land = arr > CONFIG["sea_level"]
+        high = arr > isl1["land_height"] + 0.10
+        per = sum(int((high != np.roll(high, s, ax)).sum())
+                  for s, ax in ((1, 0), (-1, 0), (1, 1), (-1, 1)))
+        return (per / max(int(high.sum()), 1),
+                float(high.sum()) / max(int(land.sum()), 1),
+                float(arr.max()))
+
+    def mean_stats(size):
+        rows = np.array([patch_stats(size, s) for s in (1000, 1001, 1002)])
+        return tuple(float(v) for v in rows.mean(axis=0))
+
+    r_small, f_small, m_small = mean_stats(0.6)
+    r_big, f_big, m_big = mean_stats(2.0)
+    check("mountain size makes broader massifs", r_big < r_small * 0.7,
+          f"perimeter/area {r_small:.3f} -> {r_big:.3f}")
+    check("mountain size keeps coverage and peak height",
+          abs(f_big - f_small) < 0.06 and abs(m_big - m_small) < 0.08,
+          f"high {f_small:.3f} -> {f_big:.3f}, max {m_small:.3f} -> {m_big:.3f}")
+
+
     base_cfg = dict(CONFIG)
     base_cfg["erosion"] = {"enabled": False, "droplets": 0, "max_steps": 0}
 
@@ -249,6 +354,35 @@ def main():
     at2, _ = preview_for(cfg_o)
     at10, _ = preview_for(cfg_t)
     check("octaves clamped (99 == 10)", np.array_equal(at2, at10))
+
+    print("== coastline realism ==")
+
+    # Coastline fractal dimension from boundary crossings at k=1,2,4,8.
+    # A smooth ellipse scores ~1.0; this coast must keep fine crenulation.
+    def coast_dim(arr, sea):
+        def boundary(m):
+            e = m.astype(np.int8)
+            return int((e[:, 1:] != e[:, :-1]).sum() + (e[1:, :] != e[:-1, :]).sum())
+        land = arr > sea
+        ks = np.array([1.0, 2.0, 4.0, 8.0])
+        L = np.array([boundary(land[::int(k), ::int(k)]) for k in ks])
+        return float(-np.polyfit(np.log(ks), np.log(L), 1)[0])
+
+    coast_cfg = dict(base_cfg, width=505, height=505,
+                     smoothing={"thermal": 0.0, "blur": 0.0},
+                     erosion={"enabled": False, "droplets": 0, "max_steps": 0},
+                     islands=[dict(ISLANDS[0], radius=0.30, angle=0.27,
+                                   land_height=0.30, mountain_height=0.0,
+                                   mountain_coverage=0.0)])
+    coast_arr, _ = preview_for(coast_cfg)
+    d_coast = coast_dim(coast_arr, base_cfg["sea_level"])
+    check("coastline is fractal (not a smooth ellipse)", d_coast > 1.05,
+          f"D={d_coast:.3f}")
+    coast_sm, _ = preview_for(dict(coast_cfg,
+                                   smoothing={"thermal": 0.5, "blur": 0.5}))
+    d_sm = coast_dim(coast_sm, base_cfg["sea_level"])
+    check("coast stays crenellated after smoothing", d_sm > 1.01,
+          f"D={d_sm:.3f}")
 
     print("== full generation (505, UE preset) ==")
     t0 = time.time()
@@ -337,10 +471,17 @@ def main():
     print("== exports ==")
     st, hds, raw = req(f"/api/export/{jid}?format=png16&sea_mode=keep")
     from PIL import Image
-    img = Image.open(io.BytesIO(raw))
-    check("png16 mode/size", st == 200 and img.mode in ("I;16", "I") and img.size == (w, hh))
-    parr = np.array(img).astype(np.float64)
-    check("png16 values exact", int(np.abs(parr - np.round(np.clip(arr, 0, 1) * 65535)).max()) <= 1)
+    # Report a non-PNG body instead of dying inside PIL: a 404/500 body
+    # here is a server bug worth seeing, not a test crash.
+    is_png = st == 200 and raw[:8] == b"\x89PNG\r\n\x1a\n"
+    check("png16 response is a png", is_png,
+          f"status {st} body {raw[:160]!r}")
+    img = Image.open(io.BytesIO(raw)) if is_png else None
+    check("png16 mode/size",
+          img is not None and img.mode in ("I;16", "I") and img.size == (w, hh))
+    want = np.round(np.clip(arr, 0, 1) * 65535)
+    check("png16 values exact",
+          img is not None and int(np.abs(np.array(img).astype(np.float64) - want).max()) <= 1)
     check("png16 filename", "png16" in (hds.get("Content-Disposition") or ""))
 
     st, hds, raw = req(f"/api/export/{jid}?format=raw16&sea_mode=keep")

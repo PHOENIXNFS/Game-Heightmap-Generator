@@ -50,7 +50,9 @@ def defaults():
 
 
 @app.post("/api/preview")
-async def preview(request: Request, size: int = Query(512, ge=64, le=2048)):
+async def preview(request: Request, size: int = Query(512, ge=64, le=1024)):
+    """Interactive preview; capped at 1024 so a stray client cannot ask the
+    server for a 2k preview. Full-resolution renders go through /api/generate."""
     body = await request.json()
     cfg = body.get("config") if isinstance(body, dict) else None
     cfg = cfg if isinstance(cfg, dict) else {}

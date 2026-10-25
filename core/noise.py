@@ -66,6 +66,42 @@ def fbm01(x, y, seed, octaves=6, persistence=0.5, lacunarity=2.0):
     return np.clip(fbm(x, y, seed, octaves, persistence, lacunarity) * 0.5 + 0.5, 0.0, 1.0)
 
 
+def ridged(x, y, seed, octaves=4, persistence=0.5, lacunarity=2.0):
+    """Ridged multifractal in [0, 1]: sharp crest lines, broad valleys.
+
+    Each octave contributes ``(1 - |noise|)**2`` weighted by the previous
+    octave, so fine detail appears on the crests instead of spraying over
+    the whole surface. That hierarchy (dominant spine, spurs, then
+    gullies) is what makes a massif read as a mountain rather than a pile
+    of equal bumps.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    total = np.zeros(np.broadcast(x, y).shape, dtype=np.float64)
+    amp = 1.0
+    freq = 1.0
+    prev = 1.0
+    norm = 0.0
+    for i in range(int(octaves)):
+        # Rotate each octave: |noise| creases otherwise follow the value
+        # noise lattice, which shows up as straight-edged steps on a flank.
+        ang = 0.37 + i * 0.7231
+        ca, sa = np.cos(ang), np.sin(ang)
+        xo = x * freq
+        yo = y * freq
+        n = 1.0 - np.abs(value_noise(
+            xo * ca - yo * sa, xo * sa + yo * ca, int(seed) + i * 1013))
+        n *= n
+        total += amp * n * prev
+        norm += amp
+        # Keep part of every octave alive: a pure multifractal suppresses
+        # fine detail to the knife-edge crest and leaves the flanks glassy.
+        prev = 0.55 + 0.45 * n
+        amp *= persistence
+        freq *= lacunarity
+    return total / norm if norm > 0.0 else total
+
+
 def island_seed(base_seed, index):
     """Stable per-island seed so editing one island doesn't perturb others."""
     return (int(base_seed) * 73856093 ^ int(index) * 19349663) & 0xFFFFFFFF

@@ -8,7 +8,16 @@ import uuid
 
 import numpy as np
 
-from .compose import compose_islands, compose_landscape, default_island_angle, apply_edge_margin
+from .compose import (
+    COVER_RANGE,
+    LAND_RANGE,
+    PEAK_RANGE,
+    SIZE_RANGE,
+    apply_edge_margin,
+    compose_islands,
+    compose_landscape,
+    default_island_angle,
+)
 from .erosion import hydraulic_erosion
 from .noise import island_seed
 from .smoothing import thermal_erosion, smooth_blur
@@ -39,6 +48,13 @@ DEFAULT_CONFIG = {
             "aspect": 1.0,
             "angle": None,
             "seed": None,  # None = derive a distinct seed from the global seed
+            # Elevation model: a flat plain at land_height with ranges of
+            # mountains above it; coverage 0 = flat atoll, 1 = all mountains,
+            # mountain_size scales how broad a single massif is.
+            "land_height": 0.12,
+            "mountain_height": 0.30,
+            "mountain_coverage": 0.20,
+            "mountain_size": 1.0,
             "enabled": True,
         }
     ],
@@ -62,6 +78,12 @@ DEFAULT_CONFIG = {
         "blur": 0.5,
     },
 }
+
+# Per-island elevation defaults (kept in sync with core.compose).
+LAND_DEFAULT = DEFAULT_CONFIG["islands"][0]["land_height"]
+PEAK_DEFAULT = DEFAULT_CONFIG["islands"][0]["mountain_height"]
+COVER_DEFAULT = DEFAULT_CONFIG["islands"][0]["mountain_coverage"]
+SIZE_DEFAULT = DEFAULT_CONFIG["islands"][0]["mountain_size"]
 
 EROSION_KEYS = (
     "inertia",
@@ -128,6 +150,11 @@ def normalize_config(cfg):
             angle = base_angle
         else:
             angle = _num(angle, base_angle, -np.pi * 4, np.pi * 4)
+        land_h = _num(item.get("land_height"), LAND_DEFAULT, *LAND_RANGE)
+        peak_h = _num(item.get("mountain_height"), PEAK_DEFAULT, *PEAK_RANGE)
+        peak_h = min(peak_h, max(0.0, 1.0 - land_h))  # land + peaks <= 1
+        cover = _num(item.get("mountain_coverage"), COVER_DEFAULT, *COVER_RANGE)
+        msize = _num(item.get("mountain_size"), SIZE_DEFAULT, *SIZE_RANGE)
         islands.append(
             {
                 "cx": _num(item.get("cx"), 0.5, -0.5, 1.5),
@@ -136,6 +163,10 @@ def normalize_config(cfg):
                 "aspect": _num(item.get("aspect"), 1.0, 0.3, 3.0),
                 "angle": angle,
                 "seed": int(isl_seed),
+                "land_height": land_h,
+                "mountain_height": peak_h,
+                "mountain_coverage": cover,
+                "mountain_size": msize,
                 "enabled": bool(item.get("enabled", True)),
             }
         )

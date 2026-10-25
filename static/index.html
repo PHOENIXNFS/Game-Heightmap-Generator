@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Terrain Heightmap Generator</title>
-<link rel="stylesheet" href="/style.css?v=3">
+<link rel="stylesheet" href="/style.css?v=4">
 </head>
 <body>
 <header id="topbar">
@@ -14,7 +14,7 @@
     <button id="seed-random" title="Pick a new random seed">&#x21bb;</button>
   </span>
   <label class="hdr-field">Preview res
-    <select id="preview-res" title="Preview canvas size; full-res export uses map W×H">
+    <select id="preview-res" title="Preview canvas size (capped at 1024); the Full res dropdown sets the exported size">
       <option value="256">256</option>
       <option value="512" selected>512</option>
       <option value="1024">1024</option>
@@ -43,18 +43,16 @@
         </label>
       </div>
       <div class="row">
-        <label title="Map width in pixels">W <input type="number" id="map-w" value="1024" min="64" max="8192" step="1"></label>
-        <label title="Map height in pixels">H <input type="number" id="map-h" value="1024" min="64" max="8192" step="1"></label>
-        <label class="chk" title="Keep width and height equal"><input type="checkbox" id="wh-linked" checked> linked</label>
-      </div>
-      <div class="row presets" id="ue-presets" title="UE5 heightmap resolutions">
-        <span>UE:</span>
-        <button data-w="505" data-h="505">505</button>
-        <button data-w="1009" data-h="1009">1009</button>
-        <button data-w="1017" data-h="1017">1017</button>
-        <button data-w="2017" data-h="2017">2017</button>
-        <button data-w="4033" data-h="4033">4033</button>
-        <button data-w="8129" data-h="8129">8129</button>
+        <label title="Size of the full-resolution heightmap (UE landscape sizes are 2^n+1); previews stay at 1024 or below">Full res
+          <select id="full-res">
+            <option value="505">505</option>
+            <option value="1009">1009</option>
+            <option value="1017">1017</option>
+            <option value="1024" selected>1024</option>
+            <option value="2017">2017 (2K)</option>
+            <option value="4033">4033 (4K)</option>
+          </select>
+        </label>
       </div>
       <div class="row slider-row" id="sea-level-row">
         <label for="sea-level" title="Water line — terrain below is ocean, above is land">Sea level</label>
@@ -146,8 +144,8 @@
     </section>
 </main>
 
-<script src="/preview2d.js?v=6"></script>
-<script src="/preview3d.js?v=3"></script>
-<script src="/app.js?v=9"></script>
+<script src="/preview2d.js?v=14"></script>
+<script src="/preview3d.js?v=8"></script>
+<script src="/app.js?v=15"></script>
 </body>
 </html>

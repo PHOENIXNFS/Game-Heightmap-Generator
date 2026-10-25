@@ -60,9 +60,9 @@ def hydraulic_erosion(
         n = int(max(1, round(droplets * 4.0 * ratio)))
     n = min(n, 500_000)
     steps = min(int(max_steps * min(ratio, 2.0)), 60)
-    # Capacity thresholds track actual slope magnitude: compressed relief
-    # (sea + RELIEF * (h - sea)) makes gentle slopes tiny, so absolute
-    # floors would otherwise force constant-rate scratching everywhere.
+    # Capacity thresholds track actual slope magnitude: island plains are
+    # nearly flat, so absolute floors would otherwise force constant-rate
+    # scratching everywhere.
     k = min(max(float(relief) / 0.5, 0.05), 2.0)
     min_capacity = min_capacity * k
     max_capacity = max_capacity * k

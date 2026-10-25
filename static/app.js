@@ -22,11 +22,10 @@
 
   function applyToUI(cfg) {
     state.config = cfg;
-    ensureIslandSeeds();
+    ensureIslandFields();
     $("seed").value = cfg.seed;
     $("mode").value = cfg.mode;
-    $("map-w").value = cfg.width;
-    $("map-h").value = cfg.height;
+    syncFullRes(cfg.width, cfg.height);
     $("sea-level").value = cfg.sea_level;
     $("sea-level-val").textContent = Number(cfg.sea_level).toFixed(3);
     $("noise-scale").value = cfg.noise.scale;
@@ -57,8 +56,9 @@
     var cfg = state.config;
     cfg.seed = clampInt($("seed").value, 0, 2147483647, 1337);
     cfg.mode = $("mode").value;
-    cfg.width = clampInt($("map-w").value, 64, 8192, 1024);
-    cfg.height = clampInt($("map-h").value, 64, 8192, 1024);
+    var fr = readFullRes();
+    cfg.width = fr.w;
+    cfg.height = fr.h;
     cfg.sea_level = Number($("sea-level").value);
     cfg.noise.scale = Number($("noise-scale").value);
     cfg.noise.detail_amp = Number($("detail-amp").value);
@@ -79,6 +79,49 @@
     return Math.min(hi, Math.max(lo, n));
   }
 
+  /* Full-res dropdown: the one control for the exported map size. Previews
+     never use it (they are capped at 1024); it only decides how big
+     "Generate Full Res" renders. A loaded config whose size is not in the
+     list (a non-square map, or a legacy 8192) gets a temporary "W×H
+     (custom)" option so it is shown rather than silently replaced. */
+  var FULL_RES_MAX = 4096;
+
+  function syncFullRes(w, h) {
+    var sel = $("full-res");
+    w = Math.min(clampInt(w, 64, FULL_RES_MAX, 1024), FULL_RES_MAX);
+    h = Math.min(clampInt(h, 64, FULL_RES_MAX, 1024), FULL_RES_MAX);
+    var custom = sel.querySelector('option[value="__custom"]');
+    var v = (w === h) ? String(w) : "";
+    var known = v ? sel.querySelector('option[value="' + v + '"]') : null;
+    if (known) {
+      if (custom) custom.parentNode.removeChild(custom);
+      sel.value = v;
+      return;
+    }
+    if (!custom) {
+      custom = document.createElement("option");
+      custom.value = "__custom";
+      sel.appendChild(custom);
+    }
+    custom.textContent = w + "\u00d7" + h + " (custom)";
+    custom.dataset.w = String(w);
+    custom.dataset.h = String(h);
+    sel.value = "__custom";
+  }
+
+  function readFullRes() {
+    var sel = $("full-res");
+    var opt = sel.options[sel.selectedIndex];
+    if (sel.value === "__custom" && opt) {
+      return {
+        w: clampInt(opt.dataset.w, 64, FULL_RES_MAX, 1024),
+        h: clampInt(opt.dataset.h, 64, FULL_RES_MAX, 1024)
+      };
+    }
+    var s = clampInt(sel.value, 64, FULL_RES_MAX, 1024);
+    return { w: s, h: s };
+  }
+
   /* Per-island seeds: every island owns one, so rerolling an island only
      reshapes that island. Kept in sync with core.noise.island_seed(). */
   function randomSeed() {
@@ -89,14 +132,40 @@
     return (Math.imul(base >>> 0, 73856093) ^ Math.imul(index, 19349663)) >>> 0;
   }
 
-  function ensureIslandSeeds() {
+  /* Deterministic PRNG: island elevation defaults follow the island seed. */
+  function mulberry32(a) {
+    return function () {
+      a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* Elevation defaults for an island that has none (new or legacy): flat
+     land + varied mountains, all derived from the island seed. */
+  function elevationFor(seed) {
+    var r = mulberry32(seed >>> 0);
+    return {
+      land_height: Math.round((0.10 + 0.06 * r()) * 1000) / 1000,
+      mountain_height: Math.round((0.15 + 0.30 * r()) * 100) / 100,
+      mountain_coverage: Math.round((0.06 + 0.30 * r()) * 100) / 100,
+      mountain_size: Math.round((0.7 + 0.9 * r()) * 100) / 100
+    };
+  }
+
+  function ensureIslandFields() {
     var islands = state.config.islands;
     for (var i = 0; i < islands.length; i++) {
-      var s = islands[i].seed;
-      if (typeof s !== "number" || !isFinite(s)) {
-        s = islandSeed(state.config.seed, i); // pre-seed configs stay reproducible
+      var isl = islands[i];
+      if (typeof isl.seed !== "number" || !isFinite(isl.seed)) {
+        isl.seed = islandSeed(state.config.seed, i); // pre-seed configs stay reproducible
       }
-      islands[i].seed = s >>> 0;
+      isl.seed = isl.seed >>> 0;
+      var def = elevationFor(isl.seed);
+      ["land_height", "mountain_height", "mountain_coverage", "mountain_size"].forEach(function (k) {
+        if (typeof isl[k] !== "number" || !isFinite(isl[k])) isl[k] = def[k];
+      });
     }
   }
 
@@ -189,12 +258,33 @@
     var aspRow = sliderRow("Aspect", "isl-as", 0.3, 3, 0.01, aspVal, Number(aspVal).toFixed(2));
     var rotRow = sliderRow("Rotation", "isl-a", 0, 360, 1, deg(isl.angle || 0), String(deg(isl.angle || 0)));
 
+    var sub = document.createElement("div");
+    sub.className = "island-sub";
+    sub.textContent = "ELEVATION";
+    var landRow = sliderRow("Land", "isl-land", 0.02, 0.5, 0.005, isl.land_height,
+      Number(isl.land_height).toFixed(3),
+      "Absolute height of this island's flat plain — keep it above sea level");
+    var peakRow = sliderRow("Peaks", "isl-peak", 0, 0.6, 0.01, isl.mountain_height,
+      Number(isl.mountain_height).toFixed(2),
+      "How far the mountains rise above the plain");
+    var covRow = sliderRow("Coverage", "isl-cov", 0, 1, 0.01, isl.mountain_coverage,
+      Number(isl.mountain_coverage).toFixed(2),
+      "How much of the island gets high ground (0 = flat atoll, 1 = mountains everywhere)");
+    var sizeRow2 = sliderRow("Mount. size", "isl-msize", 0.5, 2.5, 0.05, isl.mountain_size,
+      Number(isl.mountain_size).toFixed(2),
+      "How broad each mountain massif is — small hills up to one big range");
+
     card.appendChild(head);
     card.appendChild(pos);
     card.appendChild(seedRow);
     card.appendChild(sizeRow.row);
     card.appendChild(aspRow.row);
     card.appendChild(rotRow.row);
+    card.appendChild(sub);
+    card.appendChild(landRow.row);
+    card.appendChild(peakRow.row);
+    card.appendChild(covRow.row);
+    card.appendChild(sizeRow2.row);
 
     chk.addEventListener("change", function () {
       state.config.islands[i].enabled = chk.checked;
@@ -260,6 +350,19 @@
       changed();
       schedulePreview(true);
     });
+    function bindElevation(row, key, digits) {
+      row.input.addEventListener("input", function () {
+        var v = Number(row.input.value);
+        state.config.islands[i][key] = v;
+        row.output.textContent = digits === 3 ? v.toFixed(3) : v.toFixed(2);
+        Preview2D.setConfig(state.config);
+        changed();
+      });
+    }
+    bindElevation(landRow, "land_height", 3);
+    bindElevation(peakRow, "mountain_height", 2);
+    bindElevation(covRow, "mountain_coverage", 2);
+    bindElevation(sizeRow2, "mountain_size", 2);
     card.addEventListener("mousedown", function () {
       selectIsland(i);
     });
@@ -278,11 +381,12 @@
     return l;
   }
 
-  function sliderRow(label, cls, min, max, step, val, text) {
+  function sliderRow(label, cls, min, max, step, val, text, title) {
     var row = document.createElement("div");
     row.className = "row slider-row";
     var l = document.createElement("label");
     l.textContent = label;
+    if (title) l.title = title;
     var inp = document.createElement("input");
     inp.type = "range";
     inp.className = cls;
@@ -334,16 +438,42 @@
     a.nextElementSibling.textContent = String(d);
     var sd = card.getElementsByClassName("isl-seed")[0];
     if (sd && document.activeElement !== sd) sd.value = String(isl.seed >>> 0);
+    var ld = card.getElementsByClassName("isl-land")[0];
+    if (ld && document.activeElement !== ld) {
+      ld.value = String(isl.land_height);
+      ld.nextElementSibling.textContent = Number(isl.land_height).toFixed(3);
+    }
+    var pk = card.getElementsByClassName("isl-peak")[0];
+    if (pk && document.activeElement !== pk) {
+      pk.value = String(isl.mountain_height);
+      pk.nextElementSibling.textContent = Number(isl.mountain_height).toFixed(2);
+    }
+    var cv = card.getElementsByClassName("isl-cov")[0];
+    if (cv && document.activeElement !== cv) {
+      cv.value = String(isl.mountain_coverage);
+      cv.nextElementSibling.textContent = Number(isl.mountain_coverage).toFixed(2);
+    }
+    var ms = card.getElementsByClassName("isl-msize")[0];
+    if (ms && document.activeElement !== ms) {
+      ms.value = String(isl.mountain_size);
+      ms.nextElementSibling.textContent = Number(isl.mountain_size).toFixed(2);
+    }
   }
 
   function defaultIsland(cx, cy) {
+    var seed = randomSeed();
+    var elev = elevationFor(seed);
     return {
       cx: cx,
       cy: cy,
       radius: 0.18,
       aspect: 1.0,
       angle: 0,
-      seed: randomSeed(),
+      seed: seed,
+      land_height: elev.land_height,
+      mountain_height: elev.mountain_height,
+      mountain_coverage: elev.mountain_coverage,
+      mountain_size: elev.mountain_size,
       enabled: true
     };
   }
@@ -580,22 +710,13 @@
       updateModeUI();
       changed();
     });
-    $("map-w").addEventListener("input", function () {
-      if ($("wh-linked").checked) $("map-h").value = $("map-w").value;
-      changed();
+    $("full-res").addEventListener("change", function () {
+      // Full res only affects the full generate, not the preview (which is
+      // rendered at its own size, capped at 1024).
+      readUI();
+      state.fullDirty = true;
+      markExports();
     });
-    $("map-h").addEventListener("input", function () {
-      if ($("wh-linked").checked) $("map-w").value = $("map-h").value;
-      changed();
-    });
-    var presets = $("ue-presets").getElementsByTagName("button");
-    for (var i = 0; i < presets.length; i++) {
-      presets[i].addEventListener("click", function () {
-        $("map-w").value = this.dataset.w;
-        $("map-h").value = this.dataset.h;
-        changed();
-      });
-    }
     bindSlider("sea-level", "sea-level-val", 3, function () { changed(); });
     bindSlider("noise-scale", "noise-scale-val", 1, function () { changed(); });
     bindSlider("detail-amp", "detail-amp-val", 2, function () { changed(); });

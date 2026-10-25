@@ -9,12 +9,18 @@ window.Preview3D = (function () {
     "attribute vec3 a_pos;",
     "attribute vec3 a_nrm;",
     "attribute float a_h;",
+    "attribute float a_rock;",
+    "attribute float a_wet;",
     "uniform mat4 u_mvp;",
     "uniform mat4 u_view;",
     "varying float v_h;",
+    "varying float v_rock;",
+    "varying float v_wet;",
     "varying vec3 v_n;",
     "void main() {",
     "  v_h = a_h;",
+    "  v_rock = a_rock;",
+    "  v_wet = a_wet;",
     "  v_n = mat3(u_view) * a_nrm;",
     "  gl_Position = u_mvp * vec4(a_pos, 1.0);",
     "}"
@@ -23,30 +29,48 @@ window.Preview3D = (function () {
   var FS = [
     "precision mediump float;",
     "varying float v_h;",
+    "varying float v_rock;",
+    "varying float v_wet;",
     "varying vec3 v_n;",
     "uniform float u_sea;",
     "uniform float u_lmax;",
     "vec3 ramp(float t) {",
-    "  vec3 g = vec3(0.247, 0.490, 0.267);",
-    "  vec3 o = vec3(0.431, 0.498, 0.306);",
-    "  vec3 b = vec3(0.541, 0.522, 0.471);",
-    "  vec3 w = vec3(0.949, 0.949, 0.961);",
-    "  if (t < 0.35) return mix(g, o, t / 0.35);",
-    "  if (t < 0.65) return mix(o, b, (t - 0.35) / 0.30);",
-    "  return mix(b, w, clamp((t - 0.65) / 0.35, 0.0, 1.0));",
+    "  vec3 sand = vec3(0.788, 0.714, 0.549);",
+    "  vec3 dune = vec3(0.604, 0.635, 0.424);",
+    "  vec3 g1   = vec3(0.384, 0.533, 0.310);",
+    "  vec3 g2   = vec3(0.318, 0.467, 0.278);",
+    "  vec3 scr  = vec3(0.345, 0.439, 0.298);",
+    "  vec3 r1   = vec3(0.431, 0.424, 0.365);",
+    "  vec3 r2   = vec3(0.557, 0.537, 0.486);",
+    "  if (t < 0.045) return mix(sand, dune, t / 0.045);",
+    "  if (t < 0.120) return mix(dune, g1, (t - 0.045) / 0.075);",
+    "  if (t < 0.380) return mix(g1, g2, (t - 0.120) / 0.260);",
+    "  if (t < 0.600) return mix(g2, scr, (t - 0.380) / 0.220);",
+    "  if (t < 0.800) return mix(scr, r1, (t - 0.600) / 0.200);",
+    "  return mix(r1, r2, clamp((t - 0.800) / 0.200, 0.0, 1.0));",
     "}",
     "void main() {",
     "  vec3 base;",
     "  if (v_h < u_sea) {",
-    "    float d = clamp((u_sea - v_h) / max(u_sea, 1e-4), 0.0, 1.0);",
-    "    base = mix(vec3(0.078, 0.286, 0.478), vec3(0.031, 0.094, 0.227), d);",
+    "    float d = clamp((u_sea - v_h) / max(3.0 * u_sea, 1e-4), 0.0, 1.0);",
+    "    d = pow(d, 0.7);",
+    "    base = mix(vec3(0.102, 0.329, 0.518), vec3(0.031, 0.094, 0.227), d);",
     "  } else {",
-    "    base = ramp(clamp((v_h - u_sea) / max(u_lmax - u_sea, 1e-4), 0.0, 1.0));",
+    "    float t = clamp((v_h - u_sea) / max(u_lmax - u_sea, 1e-4), 0.0, 1.0);",
+    "    base = ramp(t);",
+    // bare rock on steep faces, so a massif reads as rock rather than as
+    // a darker patch of grass
+    "    base = mix(base, vec3(0.404, 0.396, 0.345), v_rock * 0.85);",
+    // damp, darker ground in hollows and valley floors
+    "    base *= vec3(1.0 - 0.34 * v_wet, 1.0 - 0.20 * v_wet,",
+    "                  1.0 - 0.12 * v_wet);",
     "  }",
     "  vec3 n = normalize(v_n);",
     "  vec3 l = normalize(vec3(0.45, 0.8, 0.35));",
-    "  float diff = max(dot(n, l), 0.0);",
-    "  gl_FragColor = vec4(base * (0.45 + 0.65 * diff), 1.0);",
+    // half-Lambert: a hard cosine term crushes the shadow side to black,
+    // which on a compressed heightmap reads as blotches, not as relief
+    "  float diff = dot(n, l) * 0.5 + 0.5;",
+    "  gl_FragColor = vec4(base * (0.42 + 0.78 * diff), 1.0);",
     "}"
   ].join("\n");
 
@@ -98,6 +122,8 @@ window.Preview3D = (function () {
       a_pos: gl.getAttribLocation(progTerrain, "a_pos"),
       a_nrm: gl.getAttribLocation(progTerrain, "a_nrm"),
       a_h: gl.getAttribLocation(progTerrain, "a_h"),
+      a_rock: gl.getAttribLocation(progTerrain, "a_rock"),
+      a_wet: gl.getAttribLocation(progTerrain, "a_wet"),
       u_mvp: gl.getUniformLocation(progTerrain, "u_mvp"),
       u_view: gl.getUniformLocation(progTerrain, "u_view"),
       u_sea: gl.getUniformLocation(progTerrain, "u_sea"),
@@ -112,8 +138,39 @@ window.Preview3D = (function () {
   var vboPos = gl.createBuffer();
   var vboNrm = gl.createBuffer();
   var vboH = gl.createBuffer();
+  var vboRock = gl.createBuffer();
+  var vboWet = gl.createBuffer();
   var vboIdx = gl.createBuffer();
   var vboWater = gl.createBuffer();
+
+  /* Separable box blur of a float plane, clamped at the edges. */
+  function boxBlur(src, w, h, r) {
+    var tmp = new Float32Array(w * h);
+    var out = new Float32Array(w * h);
+    var cum = new Float64Array(Math.max(w, h) + 1);
+    var x, y, i;
+    for (y = 0; y < h; y++) {
+      var row = y * w;
+      cum[0] = 0;
+      for (x = 0; x < w; x++) cum[x + 1] = cum[x] + src[row + x];
+      for (x = 0; x < w; x++) {
+        var x0 = x - r < 0 ? 0 : x - r;
+        var x1 = x + r + 1 > w ? w : x + r + 1;
+        tmp[row + x] = (cum[x1] - cum[x0]) / (x1 - x0);
+      }
+    }
+    for (x = 0; x < w; x++) {
+      cum[0] = 0;
+      for (y = 0; y < h; y++) cum[y + 1] = cum[y] + tmp[y * w + x];
+      for (y = 0; y < h; y++) {
+        var y0 = y - r < 0 ? 0 : y - r;
+        var y1 = y + r + 1 > h ? h : y + r + 1;
+        out[y * w + x] = (cum[y1] - cum[y0]) / (y1 - y0);
+      }
+    }
+    return out;
+  }
+
   var idxCount = 0;
   var sea = 0.06;
   var landMax = 1.0; // land color scale (max height), set in draw()
@@ -218,25 +275,69 @@ window.Preview3D = (function () {
         if (hv > hmax) hmax = hv;
       }
     }
-    // normals from *relative* height slopes: compressed island heights
-    // have tiny raw slopes, so normalize by the land range first
-    var lrange = Math.max((hmax - sea) / 0.65, 1e-4);
+    // normals and colors scale to p99.5 of the land heights (not the
+    // single max), /0.85 so only genuinely high ground reaches snow
+    var landVals = [];
+    for (i = 0; i < n; i++) {
+      if (hs[i] > sea) landVals.push(hs[i]);
+    }
+    landVals.sort(function (a, b) { return a - b; });
+    var lmax = landVals.length
+      ? landVals[Math.min(landVals.length - 1, Math.floor(landVals.length * 0.995))]
+      : sea;
+    var lrange = Math.max((lmax - sea) / 0.85, 1e-4);
     var hsn = new Float32Array(n);
     for (i = 0; i < n; i++) hsn[i] = (hs[i] - sea) / lrange;
     var cell = 1 / Math.max(gw - 1, 1);
+    // Vertical scale of the drawn mesh: hsn*lrange is the raw height and
+    // the vertex y is that times Z_EXAG, so the geometric normal is the
+    // one the eye actually sees. Without it the shading is ~10x too steep
+    // and most of the island falls into shadow.
+    var zs = lrange * Z_EXAG;
+    var gsx = w / 512, gsy = h / 512;
+    var rock = new Float32Array(n);
+    var wet = new Float32Array(n);
     for (y = 0; y < gh; y++) {
       for (x = 0; x < gw; x++) {
         var xl = x > 0 ? x - 1 : x, xr = x < gw - 1 ? x + 1 : x;
         var yd = y > 0 ? y - 1 : y, yu = y < gh - 1 ? y + 1 : y;
-        var dhx = (hsn[y * gw + xr] - hsn[y * gw + xl]) / (Math.max(xr - xl, 1) * cell);
-        var dhy = (hsn[yu * gw + x] - hsn[yd * gw + x]) / (Math.max(yu - yd, 1) * cell);
+        var i0 = y * gw + x;
+        var dhx = (hsn[i0 - x + xr] - hsn[i0 - x + xl])
+          / (Math.max(xr - xl, 1) * cell) * zs;
+        var dhy = (hsn[i0 + (yu - y) * gw] - hsn[i0 + (yd - y) * gw])
+          / (Math.max(yu - yd, 1) * cell) * zs;
         var nx = -dhx, ny = 1.0, nz = -dhy;
         var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-        i = y * gw + x;
-        nrm[i * 3] = nx / nl;
-        nrm[i * 3 + 1] = ny / nl;
-        nrm[i * 3 + 2] = nz / nl;
+        nrm[i0 * 3] = nx / nl;
+        nrm[i0 * 3 + 1] = ny / nl;
+        nrm[i0 * 3 + 2] = nz / nl;
+        // steepness in normalized-height units per map pixel, matching the
+        // 2D preview so both views agree on where rock is bare
+        var sxp = (hsn[i0 - x + xr] - hsn[i0 - x + xl])
+          / (Math.max(xr - xl, 1) * step) * gsx;
+        var syp = (hsn[i0 + (yu - y) * gw] - hsn[i0 + (yd - y) * gw])
+          / (Math.max(yu - yd, 1) * step) * gsy;
+        var sl = Math.sqrt(sxp * sxp + syp * syp);
+        var rk = (sl - 0.020) / 0.048;
+        rock[i0] = rk < 0 ? 0 : (rk > 1 ? 1 : rk * rk * (3 - 2 * rk));
       }
+    }
+    // Local mean height: ground below it is a hollow or a valley floor.
+    // The window is 2 *map* pixels wide (not 2 grid cells), so the shading
+    // agrees with the 2D preview at any preview resolution.
+    var rw = Math.max(1, Math.round(2 / step));
+    var meanT = boxBlur(hsn, gw, gh, rw);
+    var hollow = new Float32Array(n);
+    for (i = 0; i < n; i++) {
+      var hd = meanT[i] - hsn[i];
+      hollow[i] = hd > 0 ? hd : 0;
+    }
+    // Join the deepest ground into damp ribbons rather than 1-pixel speckle.
+    hollow = boxBlur(hollow, gw, gh, 1);
+    for (i = 0; i < n; i++) {
+      if (hs[i] <= sea) continue;
+      var wt = hollow[i] * 200;
+      wet[i] = wt > 1 ? 1 : wt;
     }
     var indices = new Uint16Array((gw - 1) * (gh - 1) * 6);
     i = 0;
@@ -249,8 +350,8 @@ window.Preview3D = (function () {
     }
     frameH = ((hmin + hmax) / 2) * Z_EXAG;
     return {
-      pos: pos, nrm: nrm, hs: hs, idx: indices,
-      count: indices.length, hmin: hmin, hmax: hmax
+      pos: pos, nrm: nrm, hs: hs, rock: rock, wet: wet, idx: indices,
+      count: indices.length, hmin: hmin, hmax: hmax, lmax: lmax
     };
   }
 
@@ -291,6 +392,12 @@ window.Preview3D = (function () {
     gl.bindBuffer(gl.ARRAY_BUFFER, vboH);
     gl.enableVertexAttribArray(loc.a_h);
     gl.vertexAttribPointer(loc.a_h, 1, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vboRock);
+    gl.enableVertexAttribArray(loc.a_rock);
+    gl.vertexAttribPointer(loc.a_rock, 1, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vboWet);
+    gl.enableVertexAttribArray(loc.a_wet);
+    gl.vertexAttribPointer(loc.a_wet, 1, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, vboIdx);
     gl.uniformMatrix4fv(loc.u_mvp, false, f32);
     gl.uniformMatrix4fv(loc.u_view, false, new Float32Array(view));
@@ -366,8 +473,8 @@ window.Preview3D = (function () {
       if (!progTerrain) return;
       sea = seaLevel;
       var mesh = buildMesh(heights, w, h);
-      // color scale tops at gray-brown (0.65 of the ramp), no snow
-      landMax = Math.max(sea + Math.max(mesh.hmax - sea, 0) / 0.65, sea + 1e-4);
+      // color scale tops out at pale rock (p99.5 of land heights)
+      landMax = Math.max(mesh.lmax, sea + 1e-4);
       showWater = mesh.hmin < sea;
       gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
       gl.bufferData(gl.ARRAY_BUFFER, mesh.pos, gl.STATIC_DRAW);
@@ -375,6 +482,10 @@ window.Preview3D = (function () {
       gl.bufferData(gl.ARRAY_BUFFER, mesh.nrm, gl.STATIC_DRAW);
       gl.bindBuffer(gl.ARRAY_BUFFER, vboH);
       gl.bufferData(gl.ARRAY_BUFFER, mesh.hs, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vboRock);
+      gl.bufferData(gl.ARRAY_BUFFER, mesh.rock, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vboWet);
+      gl.bufferData(gl.ARRAY_BUFFER, mesh.wet, gl.STATIC_DRAW);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, vboIdx);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.idx, gl.STATIC_DRAW);
       idxCount = mesh.count;
