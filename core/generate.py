@@ -8,8 +8,10 @@ import uuid
 
 import numpy as np
 
-from .compose import compose_islands, compose_landscape, default_island_angle
+from .compose import compose_islands, compose_landscape, default_island_angle, apply_edge_margin
 from .erosion import hydraulic_erosion
+from .noise import island_seed
+from .smoothing import thermal_erosion, smooth_blur
 
 MIN_DIM = 64
 MAX_DIM = 8192
@@ -36,6 +38,7 @@ DEFAULT_CONFIG = {
             "radius": 0.3,
             "aspect": 1.0,
             "angle": None,
+            "seed": None,  # None = derive a distinct seed from the global seed
             "enabled": True,
         }
     ],
@@ -53,6 +56,10 @@ DEFAULT_CONFIG = {
         "evaporate": 0.02,
         "gravity": 4.0,
         "brush_radius": 2,
+    },
+    "smoothing": {
+        "thermal": 0.5,
+        "blur": 0.5,
     },
 }
 
@@ -108,8 +115,15 @@ def normalize_config(cfg):
     for i, item in enumerate(raw_islands[:64]):
         if not isinstance(item, dict):
             continue
+        # Every island carries its own seed; the global seed only fills in
+        # the gap for configs saved before per-island seeds existed.
+        isl_seed = item.get("seed")
+        if isl_seed is None:
+            isl_seed = island_seed(seed, i)
+        else:
+            isl_seed = _num(isl_seed, island_seed(seed, i), 0, 2**32 - 1, int) & 0xFFFFFFFF
         angle = item.get("angle")
-        base_angle = default_island_angle(seed, i)
+        base_angle = default_island_angle(isl_seed, i)
         if angle is None:
             angle = base_angle
         else:
@@ -121,12 +135,14 @@ def normalize_config(cfg):
                 "radius": _num(item.get("radius"), 0.25, 0.01, 1.5),
                 "aspect": _num(item.get("aspect"), 1.0, 0.3, 3.0),
                 "angle": angle,
+                "seed": int(isl_seed),
                 "enabled": bool(item.get("enabled", True)),
             }
         )
     if not islands:
         islands = copy.deepcopy(base["islands"])
-        islands[0]["angle"] = default_island_angle(seed, 0)
+        islands[0]["seed"] = island_seed(seed, 0)
+        islands[0]["angle"] = default_island_angle(islands[0]["seed"], 0)
 
     e_in = cfg.get("erosion")
     if not isinstance(e_in, dict):
@@ -141,6 +157,13 @@ def normalize_config(cfg):
         else:
             erosion[key] = _num(e_in.get(key), erosion[key], 0.0, 100.0)
 
+    s_in = cfg.get("smoothing")
+    if not isinstance(s_in, dict):
+        s_in = {}
+    smoothing = base["smoothing"]
+    smoothing["thermal"] = _num(s_in.get("thermal"), smoothing["thermal"], 0.0, 1.0)
+    smoothing["blur"] = _num(s_in.get("blur"), smoothing["blur"], 0.0, 1.0)
+
     return {
         "width": width,
         "height": height,
@@ -150,7 +173,28 @@ def normalize_config(cfg):
         "noise": noise,
         "islands": islands,
         "erosion": erosion,
+        "smoothing": smoothing,
     }
+
+
+def islands_seed(islands):
+    """Fold every island seed into one seed for whole-map passes (erosion).
+
+    Keeps maps reproducible without a global knob: rerolling an island
+    re-rolls that island's terrain *and* the droplets that fall on it.
+    """
+    acc = 0x811C9DC5
+    for i, isl in enumerate(islands):
+        acc = island_seed(acc ^ int(isl.get("seed", 0)), i + 1)
+    return int(acc) & 0xFFFFFFFF
+
+
+def post_seed(cfg):
+    """Seed for the erosion pass: islands fold their own seeds together,
+    landscape has no islands so the global seed is the only one there is."""
+    if cfg["mode"] != "islands":
+        return int(cfg["seed"]) & 0xFFFFFFFF
+    return islands_seed(cfg["islands"])
 
 
 def run_pipeline(cfg, progress=None):
@@ -191,21 +235,40 @@ def run_pipeline(cfg, progress=None):
         )
     report(0.55, "composing done")
 
+    min_dim = min(cfg["width"], cfg["height"])
+    sea = cfg["sea_level"]
+    land = heights > sea
+    relief = float(heights[land].max() - sea) if land.any() else 0.1
+
     er = cfg["erosion"]
     if er["enabled"] and er["droplets"] > 0 and er["max_steps"] > 0:
 
         def erosion_progress(f, msg):
-            report(0.55 + 0.43 * f, msg)
+            report(0.55 + 0.28 * f, msg)
 
         heights = hydraulic_erosion(
             heights,
-            seed=cfg["seed"] ^ 0xE40510,
+            seed=post_seed(cfg) ^ 0xE40510,
             droplets=er["droplets"],
             max_steps=er["max_steps"],
             start_min_height=cfg["sea_level"] * 0.98,
+            relief=relief,
             progress=erosion_progress,
             **{k: er[k] for k in EROSION_KEYS},
         )
+
+    sm = cfg["smoothing"]
+    if sm["thermal"] > 0:
+        report(0.83, "thermal")
+        heights = thermal_erosion(heights, strength=sm["thermal"], relief=relief, min_dim=min_dim)
+    if sm["blur"] > 0:
+        report(0.89, "blur")
+        heights = smooth_blur(heights, strength=sm["blur"], min_dim=min_dim)
+    if cfg["mode"] == "islands" and cfg["noise"]["edge_margin"] > 1e-6:
+        report(0.94, "edge")
+        heights = apply_edge_margin(heights, cfg["width"], cfg["height"], cfg["noise"]["edge_margin"])
+
+    np.clip(heights, 0.0, 1.0, out=heights)
     report(1.0, "done")
     return heights
 

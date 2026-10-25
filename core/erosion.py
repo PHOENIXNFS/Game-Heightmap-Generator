@@ -42,13 +42,31 @@ def hydraulic_erosion(
     evaporate=0.02,
     gravity=4.0,
     brush_radius=2,
+    relief=1.0,
     progress=None,
 ):
     """Erode a heightmap (droplet simulation); returns a new float32 array."""
     height, width = heights.shape
     min_dim = min(width, height)
-    # Slider is calibrated for 1024; scale droplet density by area.
-    n = int(max(1, round(droplets * (min_dim / 1024.0) ** 2)))
+    # Droplet count is scaled by resolution (the slider is calibrated for
+    # 1024x1024): density-preserving quadratic up to 2k, linear beyond,
+    # soft-capped so 4k/8k stay usable. Steps scale up beyond 1024 so
+    # drainage length stays a constant fraction of the map; <=1024 is
+    # byte-identical to previous behavior.
+    ratio = min_dim / 1024.0
+    if ratio <= 2.0:
+        n = int(max(1, round(droplets * ratio * ratio)))
+    else:
+        n = int(max(1, round(droplets * 4.0 * ratio)))
+    n = min(n, 500_000)
+    steps = min(int(max_steps * min(ratio, 2.0)), 60)
+    # Capacity thresholds track actual slope magnitude: compressed relief
+    # (sea + RELIEF * (h - sea)) makes gentle slopes tiny, so absolute
+    # floors would otherwise force constant-rate scratching everywhere.
+    k = min(max(float(relief) / 0.5, 0.05), 2.0)
+    min_capacity = min_capacity * k
+    max_capacity = max_capacity * k
+    max_sediment = max_sediment * k
 
     grid = heights.astype(np.float64).tolist()
     rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
@@ -80,7 +98,7 @@ def hydraulic_erosion(
         speed = 1.0
         sediment = 0.0
         row = grid[int(y)]
-        for _step in range(int(max_steps)):
+        for _step in range(steps):
             ix = int(x)
             iy = int(y)
             if ix < 1 or iy < 1 or ix >= width - 2 or iy >= height - 2:

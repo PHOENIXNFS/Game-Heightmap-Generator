@@ -67,9 +67,17 @@ def compose_islands(
         radius = max(float(isl.get("radius", 0.25)), 1e-4)
         r_px = radius * min_dim
         asp = float(np.clip(isl.get("aspect", 1.0), 0.3, 3.0))
+        # Each island owns a seed; only legacy callers that omit it fall
+        # back to a seed derived from the global one.
+        isl_seed = isl.get("seed")
+        isl_seed = (
+            int(isl_seed) & 0xFFFFFFFF
+            if isl_seed is not None
+            else island_seed(seed, i)
+        )
         angle = isl.get("angle")
         if angle is None:
-            angle = default_island_angle(seed, i)
+            angle = default_island_angle(isl_seed, i)
         angle = float(angle)
         ca = np.float32(np.cos(angle))
         sa = np.float32(np.sin(angle))
@@ -79,8 +87,8 @@ def compose_islands(
         # Coast warp: low-frequency noise (~1 feature per radius) pushing
         # the radial distance in and out, sampled in the local frame.
         warp_freq = 1.2 / r_px
-        warp_seed = island_seed(seed, 0x51EA + i)
-        terr_seed = island_seed(seed, 0x7E42 + i)
+        warp_seed = island_seed(isl_seed, 0x51EA + i)
+        terr_seed = island_seed(isl_seed, 0x7E42 + i)
 
         reach = r_px * (1.0 + warp_amp) + 4.0
         bx0 = max(0, int(fcx) - int(np.ceil(reach)))
@@ -121,19 +129,27 @@ def compose_islands(
             np.maximum(region, h.astype(np.float32), out=region)
 
     # Guarantee open ocean at the map borders.
-    if edge_margin > 1e-6 and active:
-        margin = edge_margin * min_dim
-        xs_all = np.arange(width, dtype=np.float32)
-        for y0 in range(0, height, chunk_rows):
-            y1 = min(y0 + chunk_rows, height)
-            gy = np.arange(y0, y1, dtype=np.float32)
-            dx = np.minimum(xs_all, (width - 1) - xs_all)
-            dy = np.minimum(gy, (height - 1) - gy)
-            edge = np.minimum(dx[None, :], dy[:, None])
-            t = np.clip(edge / margin, 0.0, 1.0)
-            out[y0:y1] *= (t * t * (3.0 - 2.0 * t)).astype(np.float32)
+    apply_edge_margin(out, width, height, edge_margin)
 
     np.clip(out, 0.0, 1.0, out=out)
+    return out
+
+
+def apply_edge_margin(out, width, height, edge_margin, chunk_rows=512):
+    """Multiply the border ramps down to zero so islands never touch the map edge."""
+    if edge_margin <= 1e-6:
+        return out
+    min_dim = min(width, height)
+    margin = edge_margin * min_dim
+    xs_all = np.arange(width, dtype=np.float32)
+    dx = np.minimum(xs_all, (width - 1) - xs_all)
+    for y0 in range(0, height, chunk_rows):
+        y1 = min(y0 + chunk_rows, height)
+        gy = np.arange(y0, y1, dtype=np.float32)
+        dy = np.minimum(gy, (height - 1) - gy)
+        edge = np.minimum(dx[None, :], dy[:, None])
+        t = np.clip(edge / margin, 0.0, 1.0)
+        out[y0:y1] *= (t * t * (3.0 - 2.0 * t)).astype(np.float32)
     return out
 
 

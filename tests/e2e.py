@@ -70,7 +70,14 @@ def main():
     isl0 = defaults["config"]["islands"][0] if defaults.get("config", {}).get("islands") else {}
     check("defaults", st == 200 and "config" in defaults and "islands" in defaults["config"])
     check("defaults island angle is a number", isinstance(isl0.get("angle"), (int, float)))
+    check("defaults island has its own seed", isinstance(isl0.get("seed"), int) and isl0["seed"] >= 0)
     check("defaults has no elevation field", "elevation" not in isl0)
+    dc = defaults["config"]
+    check("defaults smoothing block", isinstance(dc.get("smoothing"), dict)
+          and all(isinstance(v, (int, float)) and 0.0 <= v <= 1.0
+                  for v in dc["smoothing"].values()))
+    st, _, raw = req("/api/preview", {"config": {"smoothing": "junk"}}, timeout=120)
+    check("malformed smoothing no crash", st == 200 and json.loads(raw)["status"] == "done")
 
     print("== preview ==")
     t0 = time.time()
@@ -158,11 +165,90 @@ def main():
     st, _, h1 = req(f"/api/heights/{p1['id']}")
     check("island count changes shape", h1 != raw)
 
+    # per-island seeds: rerolling one island must not touch the others
+    def preview_arr(cfg):
+        st_, _, r_ = req("/api/preview", {"config": cfg}, timeout=240)
+        p_ = json.loads(r_)
+        st_, hd, data = req(f"/api/heights/{p_['id']}")
+        w_, h_ = int(hd.get("X-Width")), int(hd.get("X-Height"))
+        return np.frombuffer(data, "<f4").reshape(h_, w_)
+
+    no_post = {"thermal": 0.0, "blur": 0.0}
+    no_ero = {"enabled": False, "droplets": 0, "max_steps": 0}
+    pair_a = [dict(ISLANDS[0], seed=1111), dict(ISLANDS[1], seed=2222)]
+    pair_b = [dict(ISLANDS[0], seed=9999), dict(ISLANDS[1], seed=2222)]
+    ia = preview_arr(dict(CONFIG, islands=pair_a, smoothing=no_post, erosion=no_ero))
+    ib = preview_arr(dict(CONFIG, islands=pair_b, smoothing=no_post, erosion=no_ero))
+    delta = np.abs(ia - ib)
+    # island 2 (cx 0.62 -> x >= 313 px) sits beyond island 1's compute box (x < 343)
+    far = (slice(200, 350), slice(350, 424))
+    check("rerolling island 1 leaves island 2 identical", float(delta[far].max()) == 0.0)
+    check("rerolling island 1 changes island 1", float(delta.max()) > 1e-4)
+    ig = preview_arr(dict(CONFIG, islands=pair_a, seed=4321,
+                          smoothing=no_post, erosion=no_ero))
+    check("islands ignore the global seed", bool(np.array_equal(ig, ia)))
+
+    # erosion is a whole-map pass: it folds the island seeds together
+    from core.generate import post_seed
+    ea = post_seed({"mode": "islands", "seed": 1, "islands": pair_a})
+    eb = post_seed({"mode": "islands", "seed": 1, "islands": pair_b})
+    check("erosion seed folds island seeds", isinstance(ea, int) and ea != eb)
+    check("landscape still uses the global seed",
+          post_seed({"mode": "landscape", "seed": 4321, "islands": []}) == 4321)
+    # ...so the hidden global seed must not move an islands-mode render
+    g1 = preview_arr(dict(CONFIG, islands=pair_a))
+    g2 = preview_arr(dict(CONFIG, islands=pair_a, seed=4321))
+    check("global seed ignored with erosion on", bool(np.array_equal(g1, g2)))
+    # ...but islands saved without a seed still fall back to it
+    legacy0 = preview_arr(CONFIG)
+    legacy1 = preview_arr(dict(CONFIG, seed=4321))
+    check("seedless islands fall back to the global seed",
+          not np.array_equal(legacy0, legacy1))
     # same coords must sample identically (sample == rows)
     from core.noise import fbm
     xs = np.arange(64, 128, dtype=np.float64)[None, :] * np.ones((64, 1))
     ys = np.arange(64, 128, dtype=np.float64)[:, None] * np.ones((1, 64))
     check("fbm deterministic", float(np.abs(fbm(xs, ys, 4242) - fbm(xs, ys, 4242)).max()) == 0.0)
+
+    print("== smoothing / ridges ==")
+    base_cfg = dict(CONFIG)
+    base_cfg["erosion"] = {"enabled": False, "droplets": 0, "max_steps": 0}
+
+    def preview_for(cfg, timeout=240):
+        st, _, raw = req("/api/preview", {"config": cfg}, timeout=timeout)
+        p = json.loads(raw)
+        st, hds, data = req(f"/api/heights/{p['id']}")
+        w, hh = int(hds.get("X-Width")), int(hds.get("X-Height"))
+        return np.frombuffer(data, "<f4").reshape(hh, w), p
+
+    def ridge_metric(a):
+        c = a[1:-1, 1:-1]
+        lap = np.abs(a[:-2, 1:-1] + a[2:, 1:-1] + a[1:-1, :-2] + a[1:-1, 2:] - 4.0 * c)
+        land = c > CONFIG["sea_level"]
+        return float(lap[land].mean()) if land.any() else 0.0
+
+    cfg_off = dict(base_cfg, smoothing={"thermal": 0.0, "blur": 0.0})
+    cfg_on = dict(base_cfg, smoothing={"thermal": 0.5, "blur": 0.5})
+    ao, po = preview_for(cfg_off)
+    an, pn = preview_for(cfg_on)
+    check("preview with smoothing", pn["status"] == "done")
+    mo, mn = ridge_metric(ao), ridge_metric(an)
+    check("smoothing lowers ridge metric", mn < mo * 0.9, f"off={mo:.5f} on={mn:.5f}")
+    check("borders ocean with smoothing",
+          float(max(an[0].max(), an[-1].max(), an[:, 0].max(), an[:, -1].max())) < 1e-6)
+
+    cfg_p = dict(base_cfg, smoothing={"thermal": 0.0, "blur": 0.0},
+                 noise={**base_cfg["noise"], "persistence": 0.2})
+    ap_, _ = preview_for(cfg_p)
+    check("persistence changes shape", not np.array_equal(ap_, ao))
+
+    cfg_o = dict(base_cfg, smoothing={"thermal": 0.0, "blur": 0.0},
+                 noise={**base_cfg["noise"], "octaves": 99})
+    cfg_t = dict(base_cfg, smoothing={"thermal": 0.0, "blur": 0.0},
+                 noise={**base_cfg["noise"], "octaves": 10})
+    at2, _ = preview_for(cfg_o)
+    at10, _ = preview_for(cfg_t)
+    check("octaves clamped (99 == 10)", np.array_equal(at2, at10))
 
     print("== full generation (505, UE preset) ==")
     t0 = time.time()
@@ -192,6 +278,61 @@ def main():
           and abs(s["max"] - float(arr.max())) < 1e-6
           and abs(s["land_frac"] - float((arr > CONFIG["sea_level"]).mean())) < 1e-6)
     check("stride decimation", w * hh * 4 == len(raw))
+
+    print("== high resolution smoke (2k / 4k) ==")
+    t0 = time.time()
+    st, _, raw = req("/api/generate", {"config": dict(CONFIG, width=2017, height=2017)}, timeout=600)
+    gen = json.loads(raw)
+    check("2k generate queued", st == 200 and "id" in gen)
+    jid2 = gen["id"]
+    status2 = None
+    t2 = time.time()
+    while True:
+        st, _, raw = req(f"/api/status/{jid2}")
+        status2 = json.loads(raw)
+        if status2["status"] in ("done", "error"):
+            break
+        time.sleep(0.5)
+        if time.time() - t2 > 540:
+            break
+    print(f"       2k full gen took {time.time() - t2:.1f}s (job ms={status2['ms']})")
+    check("2k full done", status2["status"] == "done", str(status2))
+    if status2["status"] == "done":
+        st, hds, raw2k = req(f"/api/heights/{jid2}")
+        w2, h2 = int(hds.get("X-Width")), int(hds.get("X-Height"))
+        a2k = np.frombuffer(raw2k, "<f4").reshape(h2, w2)
+        check("2k sizes match config", w2 == 2017 and h2 == 2017)
+        check("2k borders ocean",
+              float(max(a2k[0].max(), a2k[-1].max(), a2k[:, 0].max(), a2k[:, -1].max())) < 1e-6)
+        check("2k range sane", float(a2k.min()) >= 0 and float(a2k.max()) <= 1.0001)
+
+    cfg_4k = dict(CONFIG, width=4033, height=4033,
+                  erosion={"enabled": False, "droplets": 0, "max_steps": 0})
+    t0 = time.time()
+    st, _, raw = req("/api/generate", {"config": cfg_4k}, timeout=600)
+    gen = json.loads(raw)
+    check("4k generate queued (erosion off)", st == 200 and "id" in gen)
+    jid4 = gen["id"]
+    status4 = None
+    t4 = time.time()
+    while True:
+        st, _, raw = req(f"/api/status/{jid4}")
+        status4 = json.loads(raw)
+        if status4["status"] in ("done", "error"):
+            break
+        time.sleep(0.5)
+        if time.time() - t4 > 540:
+            break
+    print(f"       4k full gen took {time.time() - t4:.1f}s (job ms={status4['ms']})")
+    check("4k full done (erosion off)", status4["status"] == "done", str(status4))
+    if status4["status"] == "done":
+        st, hds, raw4k = req(f"/api/heights/{jid4}")
+        w4, h4 = int(hds.get("X-Width")), int(hds.get("X-Height"))
+        a4k = np.frombuffer(raw4k, "<f4").reshape(h4, w4)
+        check("4k sizes match config", w4 == 4033 and h4 == 4033)
+        check("4k borders ocean",
+              float(max(a4k[0].max(), a4k[-1].max(), a4k[:, 0].max(), a4k[:, -1].max())) < 1e-6)
+        check("4k range sane", float(a4k.min()) >= 0 and float(a4k.max()) <= 1.0001)
 
     print("== exports ==")
     st, hds, raw = req(f"/api/export/{jid}?format=png16&sea_mode=keep")

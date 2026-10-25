@@ -4,36 +4,38 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Terrain Heightmap Generator</title>
-<link rel="stylesheet" href="/style.css?v=2">
+<link rel="stylesheet" href="/style.css?v=3">
 </head>
 <body>
 <header id="topbar">
-  <span id="app-title">Terrain Heightmap Generator</span>
-  <label class="hdr-field">Seed <input type="number" id="seed" value="1337" min="0" step="1"></label>
-  <button id="seed-random" title="Randomize seed">&#x21bb;</button>
+  <span id="app-title" title="Terrain Heightmap Generator — make UE5 heightmaps (PNG16 / RAW r16 / EXR)">Terrain Heightmap Generator</span>
+  <span id="global-seed-field" class="hdr-field">
+    <label class="hdr-field">Seed <input type="number" id="seed" value="1337" min="0" step="1" title="Global seed for landscape terrain and its erosion — hidden in islands mode, where every island has its own seed"></label>
+    <button id="seed-random" title="Pick a new random seed">&#x21bb;</button>
+  </span>
   <label class="hdr-field">Preview res
-    <select id="preview-res">
+    <select id="preview-res" title="Preview canvas size; full-res export uses map W×H">
       <option value="256">256</option>
       <option value="512" selected>512</option>
       <option value="1024">1024</option>
     </select>
   </label>
-  <button id="generate-full" class="primary">Generate Full Res</button>
+  <button id="generate-full" class="primary" title="Render the full-size heightmap (can take seconds to minutes at 2k/4k)">Generate Full Res</button>
   <div class="spacer"></div>
-  <button id="export-png16" disabled>PNG16</button>
-  <button id="export-raw16" disabled>RAW r16</button>
-  <button id="export-exr" disabled>EXR</button>
-  <button id="save-cfg">Save</button>
-  <button id="load-cfg">Load</button>
+  <button id="export-png16" disabled title="Export 16-bit PNG heightmap">PNG16</button>
+  <button id="export-raw16" disabled title="Export RAW r16 (little-endian uint16, width×height pixels)">RAW r16</button>
+  <button id="export-exr" disabled title="Export OpenEXR half-float single channel">EXR</button>
+  <button id="save-cfg" title="Save current config to a JSON file">Save</button>
+  <button id="load-cfg" title="Load config from a JSON file">Load</button>
   <input type="file" id="load-cfg-file" accept=".json" hidden>
 </header>
 
 <main id="layout">
   <aside id="sidebar">
     <section class="panel">
-      <h2>MAP</h2>
+      <h2>MAP <span class="hint">• islands vs full-map terrain, resolution, sea level</span></h2>
       <div class="row">
-        <label>Mode
+        <label title="Islands = isolated islands; Landscape = continuous terrain running off the map edges">Mode
           <select id="mode">
             <option value="islands" selected>Islands</option>
             <option value="landscape">Landscape</option>
@@ -41,11 +43,11 @@
         </label>
       </div>
       <div class="row">
-        <label>W <input type="number" id="map-w" value="1024" min="64" max="8192" step="1"></label>
-        <label>H <input type="number" id="map-h" value="1024" min="64" max="8192" step="1"></label>
-        <label class="chk"><input type="checkbox" id="wh-linked" checked> linked</label>
+        <label title="Map width in pixels">W <input type="number" id="map-w" value="1024" min="64" max="8192" step="1"></label>
+        <label title="Map height in pixels">H <input type="number" id="map-h" value="1024" min="64" max="8192" step="1"></label>
+        <label class="chk" title="Keep width and height equal"><input type="checkbox" id="wh-linked" checked> linked</label>
       </div>
-      <div class="row presets" id="ue-presets">
+      <div class="row presets" id="ue-presets" title="UE5 heightmap resolutions">
         <span>UE:</span>
         <button data-w="505" data-h="505">505</button>
         <button data-w="1009" data-h="1009">1009</button>
@@ -55,46 +57,70 @@
         <button data-w="8129" data-h="8129">8129</button>
       </div>
       <div class="row slider-row" id="sea-level-row">
-        <label for="sea-level">Sea level</label>
+        <label for="sea-level" title="Water line — terrain below is ocean, above is land">Sea level</label>
         <input type="range" id="sea-level" min="0" max="1" step="0.005" value="0.06">
         <output id="sea-level-val">0.060</output>
       </div>
     </section>
 
     <section class="panel" id="islands-panel">
-      <h2>ISLANDS <button id="island-add" class="small">+ add</button></h2>
+      <h2>ISLANDS <button id="island-add" class="small" title="Add a new island">+ add</button> <button id="island-reroll" class="small" title="Give every island a new random seed (each island keeps its own seed otherwise)">&#x21bb; seeds</button> <span class="hint">• drag island bodies/handles in the 2D preview; click an island card to select it</span></h2>
       <div id="island-list"></div>
     </section>
 
     <section class="panel">
       <h2>TERRAIN NOISE <button id="noise-reset" class="small">&#x21bb; reset</button></h2>
       <div class="row slider-row">
-        <label for="noise-scale">Feature size</label>
+        <label for="noise-scale" title="Base hill spacing — noise frequency">Feature size</label>
         <input type="range" id="noise-scale" min="0.5" max="20" step="0.1" value="2.5">
         <output id="noise-scale-val">2.5</output>
       </div>
       <div class="row slider-row">
-        <label for="detail-amp">Terrain detail</label>
+        <label for="detail-amp" title="Amplitude of fine noise detail">Terrain detail</label>
         <input type="range" id="detail-amp" min="0" max="1" step="0.01" value="0.4">
         <output id="detail-amp-val">0.40</output>
       </div>
       <div class="row slider-row">
-        <label for="coast-warp">Coast roughness</label>
+        <label for="coast-warp" title="How much the coastline warps in and out">Coast roughness</label>
         <input type="range" id="coast-warp" min="0" max="1" step="0.01" value="0.35">
         <output id="coast-warp-val">0.35</output>
+      </div>
+      <div class="row slider-row">
+        <label for="noise-persistence" title="Persistence — how fast fine octaves fade (lower = smoother hills)">Detail falloff</label>
+        <input type="range" id="noise-persistence" min="0.05" max="0.95" step="0.01" value="0.5">
+        <output id="noise-persistence-val">0.50</output>
+      </div>
+      <div class="row slider-row">
+        <label for="noise-octaves" title="Number of noise layers">Octaves</label>
+        <input type="range" id="noise-octaves" min="1" max="10" step="1" value="6">
+        <output id="noise-octaves-val">6</output>
       </div>
     </section>
 
     <section class="panel">
-      <h2 class="chk-head"><label class="chk"><input type="checkbox" id="erosion-enabled" checked> HYDRAULIC EROSION</label></h2>
+      <h2>SMOOTHING</h2>
+      <div class="row slider-row">
+        <label for="smoothing-thermal" title="Talus slump — rounds sharp ridge crests into smooth shoulders">Thermal</label>
+        <input type="range" id="smoothing-thermal" min="0" max="1" step="0.01" value="0.5">
+        <output id="smoothing-thermal-val">0.50</output>
+      </div>
+      <div class="row slider-row">
+        <label for="smoothing-blur" title="Gaussian blur — removes residual scratches">Blur</label>
+        <input type="range" id="smoothing-blur" min="0" max="1" step="0.01" value="0.5">
+        <output id="smoothing-blur-val">0.50</output>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="chk-head"><label class="chk" title="Raindrops carving valleys downhill"><input type="checkbox" id="erosion-enabled" checked> HYDRAULIC EROSION</label></h2>
       <div id="erosion-controls">
         <div class="row slider-row">
-          <label for="erosion-droplets">Droplets</label>
+          <label for="erosion-droplets" title="Number of raindrops; more = deeper valleys">Droplets</label>
           <input type="range" id="erosion-droplets" min="0" max="400000" step="5000" value="60000">
           <output id="erosion-droplets-val">60000</output>
         </div>
         <div class="row slider-row">
-          <label for="erosion-steps">Steps</label>
+          <label for="erosion-steps" title="Path length per droplet">Steps</label>
           <input type="range" id="erosion-steps" min="0" max="120" step="1" value="30">
           <output id="erosion-steps-val">30</output>
         </div>
@@ -102,7 +128,7 @@
     </section>
 
     <section class="panel">
-      <h2>STATS</h2>
+      <h2>STATS <span class="hint">• min / max / mean height and land % above sea level</span></h2>
       <div id="stats-line">no preview yet</div>
       <div id="preview-ms"></div>
     </section>
@@ -116,12 +142,12 @@
     <div class="pane">
       <div class="pane-title">3D PREVIEW <span class="hint">left-drag orbit &middot; wheel zoom &middot; right-drag pan &middot; double-click resets view</span></div>
       <div id="pane3d-wrap"><canvas id="pane3d"></canvas></div>
-    </div>
-  </section>
+      </div>
+    </section>
 </main>
 
 <script src="/preview2d.js?v=6"></script>
 <script src="/preview3d.js?v=3"></script>
-<script src="/app.js?v=5"></script>
+<script src="/app.js?v=9"></script>
 </body>
 </html>

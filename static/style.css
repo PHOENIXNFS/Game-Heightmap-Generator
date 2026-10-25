@@ -141,10 +141,16 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .island-head button { padding: 1px 6px; font-size: 12px; }
 .island-pos { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
 .island-pos label { display: flex; align-items: center; gap: 5px; color: var(--fg-dim); font-size: 12px; }
-.island-pos input {
+.island-pos input, .island-seed input {
   background: var(--bg2); color: var(--fg); border: 1px solid var(--line);
   border-radius: 4px; padding: 3px 5px; width: 100%; font: inherit; font-size: 12px;
 }
+.island-seed {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+  color: var(--fg-dim); font-size: 12px;
+}
+.island-seed label { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; }
+.island-seed button { flex: none; }
 
 /* ---------- stats ---------- */
 #stats-line { color: var(--fg); font-variant-numeric: tabular-nums; }

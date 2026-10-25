@@ -22,6 +22,7 @@
 
   function applyToUI(cfg) {
     state.config = cfg;
+    ensureIslandSeeds();
     $("seed").value = cfg.seed;
     $("mode").value = cfg.mode;
     $("map-w").value = cfg.width;
@@ -34,6 +35,14 @@
     $("detail-amp-val").textContent = Number(cfg.noise.detail_amp).toFixed(2);
     $("coast-warp").value = cfg.noise.coast_warp;
     $("coast-warp-val").textContent = Number(cfg.noise.coast_warp).toFixed(2);
+    $("noise-persistence").value = cfg.noise.persistence;
+    $("noise-persistence-val").textContent = Number(cfg.noise.persistence).toFixed(2);
+    $("noise-octaves").value = cfg.noise.octaves;
+    $("noise-octaves-val").textContent = String(cfg.noise.octaves);
+    $("smoothing-thermal").value = cfg.smoothing.thermal;
+    $("smoothing-thermal-val").textContent = Number(cfg.smoothing.thermal).toFixed(2);
+    $("smoothing-blur").value = cfg.smoothing.blur;
+    $("smoothing-blur-val").textContent = Number(cfg.smoothing.blur).toFixed(2);
     $("erosion-enabled").checked = cfg.erosion.enabled;
     $("erosion-droplets").value = cfg.erosion.droplets;
     $("erosion-droplets-val").textContent = String(cfg.erosion.droplets);
@@ -54,6 +63,10 @@
     cfg.noise.scale = Number($("noise-scale").value);
     cfg.noise.detail_amp = Number($("detail-amp").value);
     cfg.noise.coast_warp = Number($("coast-warp").value);
+    cfg.noise.persistence = Number($("noise-persistence").value);
+    cfg.noise.octaves = clampInt($("noise-octaves").value, 1, 10, 6);
+    cfg.smoothing.thermal = Number($("smoothing-thermal").value);
+    cfg.smoothing.blur = Number($("smoothing-blur").value);
     cfg.erosion.enabled = $("erosion-enabled").checked;
     cfg.erosion.droplets = clampInt($("erosion-droplets").value, 0, 400000, 60000);
     cfg.erosion.max_steps = clampInt($("erosion-steps").value, 0, 120, 30);
@@ -66,10 +79,33 @@
     return Math.min(hi, Math.max(lo, n));
   }
 
+  /* Per-island seeds: every island owns one, so rerolling an island only
+     reshapes that island. Kept in sync with core.noise.island_seed(). */
+  function randomSeed() {
+    return Math.floor(Math.random() * 4294967296) >>> 0;
+  }
+
+  function islandSeed(base, index) {
+    return (Math.imul(base >>> 0, 73856093) ^ Math.imul(index, 19349663)) >>> 0;
+  }
+
+  function ensureIslandSeeds() {
+    var islands = state.config.islands;
+    for (var i = 0; i < islands.length; i++) {
+      var s = islands[i].seed;
+      if (typeof s !== "number" || !isFinite(s)) {
+        s = islandSeed(state.config.seed, i); // pre-seed configs stay reproducible
+      }
+      islands[i].seed = s >>> 0;
+    }
+  }
+
   function updateModeUI() {
     var isl = $("islands-panel");
     var islands = state.config.mode === "islands";
     isl.style.display = islands ? "" : "none";
+    var seedField = $("global-seed-field");
+    if (seedField) seedField.style.display = islands ? "none" : ""; // islands carry their own seeds
     var seaRow = $("sea-level-row");
     if (seaRow) seaRow.style.display = islands ? "" : "none";
     if (window.Preview2D) Preview2D.setConfig(state.config);
@@ -127,6 +163,27 @@
     pos.appendChild(posInput("X", "isl-x", isl.cx));
     pos.appendChild(posInput("Y", "isl-y", isl.cy));
 
+    var seedRow = document.createElement("div");
+    seedRow.className = "island-seed";
+    var seedLabel = document.createElement("label");
+    seedLabel.textContent = "Seed ";
+    seedLabel.title = "Random seed for this island only — rerolling it leaves the other islands untouched";
+    var seedInp = document.createElement("input");
+    seedInp.type = "number";
+    seedInp.className = "isl-seed";
+    seedInp.min = "0";
+    seedInp.max = "4294967295";
+    seedInp.step = "1";
+    seedInp.value = String(isl.seed >>> 0);
+    seedLabel.appendChild(seedInp);
+    var reroll = document.createElement("button");
+    reroll.type = "button";
+    reroll.className = "small isl-reroll";
+    reroll.textContent = "\u21bb";
+    reroll.title = "reroll this island's seed";
+    seedRow.appendChild(seedLabel);
+    seedRow.appendChild(reroll);
+
     var sizeRow = sliderRow("Size", "isl-r", 0.02, 0.9, 0.005, isl.radius, Number(isl.radius).toFixed(3));
     var aspVal = isl.aspect == null ? 1 : isl.aspect;
     var aspRow = sliderRow("Aspect", "isl-as", 0.3, 3, 0.01, aspVal, Number(aspVal).toFixed(2));
@@ -134,6 +191,7 @@
 
     card.appendChild(head);
     card.appendChild(pos);
+    card.appendChild(seedRow);
     card.appendChild(sizeRow.row);
     card.appendChild(aspRow.row);
     card.appendChild(rotRow.row);
@@ -189,6 +247,18 @@
       syncCard(i);
       Preview2D.setConfig(state.config);
       changed();
+    });
+    seedInp.addEventListener("change", function () {
+      var v = clampInt(seedInp.value, 0, 4294967295, state.config.islands[i].seed >>> 0);
+      state.config.islands[i].seed = v;
+      seedInp.value = String(v);
+      changed();
+    });
+    reroll.addEventListener("click", function () {
+      state.config.islands[i].seed = randomSeed();
+      seedInp.value = String(state.config.islands[i].seed);
+      changed();
+      schedulePreview(true);
     });
     card.addEventListener("mousedown", function () {
       selectIsland(i);
@@ -262,6 +332,8 @@
     var d = deg(isl.angle || 0);
     a.value = String(d);
     a.nextElementSibling.textContent = String(d);
+    var sd = card.getElementsByClassName("isl-seed")[0];
+    if (sd && document.activeElement !== sd) sd.value = String(isl.seed >>> 0);
   }
 
   function defaultIsland(cx, cy) {
@@ -271,6 +343,7 @@
       radius: 0.18,
       aspect: 1.0,
       angle: 0,
+      seed: randomSeed(),
       enabled: true
     };
   }
@@ -462,6 +535,11 @@
                 if (Object.prototype.hasOwnProperty.call(cfg.erosion, k2)) base.erosion[k2] = cfg.erosion[k2];
               }
             }
+            if (cfg.smoothing) {
+              for (var k3 in cfg.smoothing) {
+                if (Object.prototype.hasOwnProperty.call(cfg.smoothing, k3)) base.smoothing[k3] = cfg.smoothing[k3];
+              }
+            }
             if (Array.isArray(cfg.islands) && cfg.islands.length) base.islands = cfg.islands;
             applyToUI(base);
             changed();
@@ -522,6 +600,10 @@
     bindSlider("noise-scale", "noise-scale-val", 1, function () { changed(); });
     bindSlider("detail-amp", "detail-amp-val", 2, function () { changed(); });
     bindSlider("coast-warp", "coast-warp-val", 2, function () { changed(); });
+    bindSlider("noise-persistence", "noise-persistence-val", 2, function () { changed(); });
+    bindSlider("noise-octaves", "noise-octaves-val", 0, function () { changed(); });
+    bindSlider("smoothing-thermal", "smoothing-thermal-val", 2, function () { changed(); });
+    bindSlider("smoothing-blur", "smoothing-blur-val", 2, function () { changed(); });
 
     $("noise-reset").addEventListener("click", function () {
       $("noise-scale").value = "2.5";
@@ -530,6 +612,10 @@
       $("detail-amp-val").textContent = "0.40";
       $("coast-warp").value = "0.35";
       $("coast-warp-val").textContent = "0.35";
+      $("noise-persistence").value = "0.5";
+      $("noise-persistence-val").textContent = "0.50";
+      $("noise-octaves").value = "6";
+      $("noise-octaves-val").textContent = "6";
       changed();
     });
 
@@ -548,6 +634,13 @@
       renderIslandCards();
       selectIsland(state.config.islands.length - 1);
       changed();
+    });
+    $("island-reroll").addEventListener("click", function () {
+      var islands = state.config.islands;
+      for (var k = 0; k < islands.length; k++) islands[k].seed = randomSeed();
+      renderIslandCards();
+      changed();
+      schedulePreview(true);
     });
 
     // preview handles
