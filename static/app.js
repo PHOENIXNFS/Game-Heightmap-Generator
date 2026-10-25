@@ -79,46 +79,37 @@
     return Math.min(hi, Math.max(lo, n));
   }
 
-  /* Full-res dropdown: the one control for the exported map size. Previews
-     never use it (they are capped at 1024); it only decides how big
-     "Generate Full Res" renders. A loaded config whose size is not in the
-     list (a non-square map, or a legacy 8192) gets a temporary "W×H
-     (custom)" option so it is shown rather than silently replaced. */
+  /* Full-res dropdown: shortcuts for the exported map size, with a Custom
+     entry that exposes free W/H fields (non-square allowed) so the tool is
+     not tied to Unreal's 2^n+1 sizes. Previews never use it: they are
+     capped at 1024 and rendered at their own size. */
   var FULL_RES_MAX = 4096;
 
+  function clampSize(v) {
+    return clampInt(v, 64, FULL_RES_MAX, 1024);
+  }
+
+  /* Reflect the config's size in the dropdown. A size that is not a preset
+     (a non-square map, or an off-list value) switches the select to
+     "Custom…" and fills the W/H fields instead of being replaced. */
   function syncFullRes(w, h) {
+    w = clampSize(w);
+    h = clampSize(h);
     var sel = $("full-res");
-    w = Math.min(clampInt(w, 64, FULL_RES_MAX, 1024), FULL_RES_MAX);
-    h = Math.min(clampInt(h, 64, FULL_RES_MAX, 1024), FULL_RES_MAX);
-    var custom = sel.querySelector('option[value="__custom"]');
     var v = (w === h) ? String(w) : "";
-    var known = v ? sel.querySelector('option[value="' + v + '"]') : null;
-    if (known) {
-      if (custom) custom.parentNode.removeChild(custom);
-      sel.value = v;
-      return;
-    }
-    if (!custom) {
-      custom = document.createElement("option");
-      custom.value = "__custom";
-      sel.appendChild(custom);
-    }
-    custom.textContent = w + "\u00d7" + h + " (custom)";
-    custom.dataset.w = String(w);
-    custom.dataset.h = String(h);
-    sel.value = "__custom";
+    var preset = v ? sel.querySelector('option[value="' + v + '"]') : null;
+    $("custom-w").value = w;
+    $("custom-h").value = h;
+    $("custom-size-row").style.display = preset ? "none" : "";
+    sel.value = preset ? v : "__custom";
   }
 
   function readFullRes() {
     var sel = $("full-res");
-    var opt = sel.options[sel.selectedIndex];
-    if (sel.value === "__custom" && opt) {
-      return {
-        w: clampInt(opt.dataset.w, 64, FULL_RES_MAX, 1024),
-        h: clampInt(opt.dataset.h, 64, FULL_RES_MAX, 1024)
-      };
+    if (sel.value === "__custom") {
+      return { w: clampSize($("custom-w").value), h: clampSize($("custom-h").value) };
     }
-    var s = clampInt(sel.value, 64, FULL_RES_MAX, 1024);
+    var s = clampSize(sel.value);
     return { w: s, h: s };
   }
 
@@ -486,6 +477,15 @@
     schedulePreview();
   }
 
+  /* Full res only affects the full generate, never the preview, so this
+     does not schedule a preview (which would just re-render the same
+     picture at the preview size). */
+  function fullResChanged() {
+    readUI();
+    state.fullDirty = true;
+    markExports();
+  }
+
   function schedulePreview(immediate) {
     if (state.previewTimer) clearTimeout(state.previewTimer);
     if (immediate) {
@@ -711,12 +711,32 @@
       changed();
     });
     $("full-res").addEventListener("change", function () {
-      // Full res only affects the full generate, not the preview (which is
-      // rendered at its own size, capped at 1024).
-      readUI();
-      state.fullDirty = true;
-      markExports();
+      if (this.value === "__custom") {
+        // start from the current size so the fields are never empty
+        $("custom-w").value = state.config.width;
+        $("custom-h").value = state.config.height;
+        $("custom-size-row").style.display = "";
+      } else {
+        $("custom-size-row").style.display = "none";
+      }
+      fullResChanged();
     });
+    $("custom-w").addEventListener("input", function () {
+      if ($("wh-linked").checked) $("custom-h").value = $("custom-w").value;
+      fullResChanged();
+    });
+    $("custom-h").addEventListener("input", function () {
+      if ($("wh-linked").checked) $("custom-w").value = $("custom-h").value;
+      fullResChanged();
+    });
+    // On blur/Enter, show the clamped value instead of leaving 99999 in a box.
+    function normalizeCustomSize() {
+      readUI();
+      $("custom-w").value = state.config.width;
+      $("custom-h").value = state.config.height;
+    }
+    $("custom-w").addEventListener("change", normalizeCustomSize);
+    $("custom-h").addEventListener("change", normalizeCustomSize);
     bindSlider("sea-level", "sea-level-val", 3, function () { changed(); });
     bindSlider("noise-scale", "noise-scale-val", 1, function () { changed(); });
     bindSlider("detail-amp", "detail-amp-val", 2, function () { changed(); });

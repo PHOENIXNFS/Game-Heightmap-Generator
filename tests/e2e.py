@@ -62,7 +62,9 @@ def main():
     print("== static + meta ==")
     st, h, raw = req("/")
     check("index.html served", st == 200 and b"Terrain Heightmap" in raw)
-    check("full-res dropdown present", b'id="full-res"' in raw and b'id="preview-res"' in raw)
+    check("full-res dropdown present",
+          b'id="full-res"' in raw and b'id="preview-res"' in raw
+          and b'id="custom-w"' in raw and b'id="custom-h"' in raw)
     for asset in ("/style.css", "/app.js", "/preview2d.js", "/preview3d.js"):
         st, _, raw = req(asset)
         check(f"{asset} served", st == 200 and len(raw) > 500)
