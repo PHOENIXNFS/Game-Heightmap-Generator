@@ -79,7 +79,8 @@ window.Preview2D = (function () {
 
   function renderBase() {
     if (!heights) return;
-    var sea = cfg ? cfg.sea_level : 0.06;
+    // Landscape is inland: no sea line, so nothing is ever painted as water.
+    var sea = cfg ? (cfg.mode === "landscape" ? 0 : cfg.sea_level) : 0.06;
     // Land colors span sea..p99.5 of the land heights, divided by 0.85 so
     // only genuinely high ground reaches pale rock/snow. Using a
     // percentile instead of the max keeps one spike from washing the
@@ -128,6 +129,35 @@ window.Preview2D = (function () {
     // Slope/hollow thresholds are in pixels of the *preview*; rescale so a
     // 256 preview and a 1024 preview shade the same island area.
     var gs = iw / 512;
+    // Slope in ramp units per 512-pixel width, plus this map's own p99 so
+    // bare rock follows the terrain instead of an island-tuned constant:
+    // compact island peaks and broad landscape ranges differ ~10x in
+    // absolute slope, and both should read as rock where they are steep.
+    var slope = new Float32Array(n);
+    var slSample = [];
+    for (var ys = 0; ys < ih; ys++) {
+      for (var xs = 0; xs < iw; xs++) {
+        var is = ys * iw + xs;
+        var sxm = xs > 0 ? is - 1 : is;
+        var sxp2 = xs + 1 < iw ? is + 1 : is;
+        var sym = ys > 0 ? is - iw : is;
+        var syp2 = ys + 1 < ih ? is + iw : is;
+        var sxv = (tn[sxp2] - tn[sxm]) * 0.5 * gs;
+        var syv = (tn[syp2] - tn[sym]) * 0.5 * gs;
+        var sv = Math.sqrt(sxv * sxv + syv * syv);
+        slope[is] = sv;
+        if (heights[is] >= sea && is % 5 === 0) slSample.push(sv);
+      }
+    }
+    slSample.sort(function (a, b) { return a - b; });
+    var slRef = slSample.length
+      ? slSample[Math.min(slSample.length - 1, Math.floor(slSample.length * 0.99))]
+      : 0.1;
+    if (slRef < 1e-5) slRef = 1e-5;
+    // Fractions of that reference: at the island reference (0.1) this is the
+    // old fixed ramp, 0.020 .. 0.068. Kept in step with preview3d.js.
+    var rockLo = 0.20 * slRef;
+    var rockHi = 0.68 * slRef;
     // water depth ramps over 3x sea level, so shallow shelves stay
     // subtle instead of ringing every coast in bright cyan
     var invSea = 1 / Math.max(3 * sea, 1e-4);
@@ -157,13 +187,13 @@ window.Preview2D = (function () {
           // Hillshade: half-Lambert from the north-west. A hard Lambert
           // term crushes the shadow side to black on these compressed
           // heights, which reads as blotches rather than relief.
-          var sl = Math.sqrt(sx * sx + sy * sy);
+          var sl = slope[i];
           var lam = (0.62 - 0.52 * sx - 0.52 * sy) / Math.sqrt(sl * sl + 1);
           var sh = 0.56 + 0.78 * (lam < 0 ? 0 : lam);
-          // Bare rock on steep ground: a 20-25 degree face is where soil
-          // gives up on a real island, and it is what makes a massif
-          // read as rock instead of a darker patch of grass.
-          var rock = (sl - 0.020) / 0.048;
+          // Bare rock on steep ground: the threshold scales with this map's
+          // own steepness, so broad landscape ranges and compact island
+          // peaks both show bare rock on their flanks.
+          var rock = (sl - rockLo) / (rockHi - rockLo);
           if (rock < 0) rock = 0; if (rock > 1) rock = 1;
           rock = rock * rock * (3 - 2 * rock);
           r = c[0]; g = c[1]; b = c[2];

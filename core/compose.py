@@ -23,7 +23,8 @@ floods land: raising it eats into the shore band and then the plain.
 All noise is sampled in the island's rotated local frame, so rotation
 is a rigid rotation of the whole island.
 
-Landscape: full-map FBM terrain that runs off the map edges.
+Landscape: inland terrain built from the same mask -> crest stack at map
+scale, with no coast, running off the map edges.
 """
 
 import numpy as np
@@ -110,14 +111,36 @@ CREST_FALLOFF = 0.90
 # Island footprint sampled on a NxN grid to calibrate the mask.
 MASK_SAMPLES = 48
 # Per-island elevation defaults/clamps for callers that omit them.
-DEFAULT_LAND = 0.12
-DEFAULT_PEAKS = 0.30
+DEFAULT_LAND = 0.085
+DEFAULT_PEAKS = 0.10
 DEFAULT_COVER = 0.20
 DEFAULT_SIZE = 1.0
 LAND_RANGE = (0.02, 0.60)
 PEAK_RANGE = (0.0, 0.60)
 COVER_RANGE = (0.0, 1.0)
 SIZE_RANGE = (0.6, 2.0)
+
+# ---- landscape (map-scale) ----
+# The landscape reuses the island stack (mask -> spine -> crest) but the
+# mask lives in map coordinates instead of an island footprint, and there
+# is no coast: lowland everywhere, with a few ranges rising out of it.
+LANDSCAPE_LAND = 0.10
+LANDSCAPE_PEAKS = 0.30
+LANDSCAPE_COVER = 0.18
+LANDSCAPE_SIZE = 1.0
+# Mountain features per map at size 1 (a massif is roughly 1/this wide).
+# Low enough that a map holds 1-3 ranges rather than a field of cones.
+LAND_MTN_FREQ = 1.3
+# Domain warp of the mask: fraction of the map, and cycles per map.
+LAND_WARP = 0.06
+LAND_WARP_FREQ = 1.2
+# Cluster field that gathers high ground into 1-3 nuclei, cycles per map.
+LAND_CLUSTER_FREQ = 0.8
+# Broad positive swell across the lowland, cycles per map.
+LAND_SWELL_FREQ = 1.2
+# Coarse grid used to calibrate the mask distribution over the whole map.
+LAND_SAMPLES = 64
+
 
 
 def _smoothstep(e0, e1, x):
@@ -182,6 +205,21 @@ def island_elevation(isl):
     cover = float(np.clip(_float(isl.get("mountain_coverage"), DEFAULT_COVER), lo, hi))
     lo, hi = SIZE_RANGE
     size = float(np.clip(_float(isl.get("mountain_size"), DEFAULT_SIZE), lo, hi))
+    return land, peak, cover, size
+
+
+def landscape_elevation(lcfg):
+    """Clamped (land_height, mountain_height, coverage, size) for landscape."""
+    lcfg = lcfg if isinstance(lcfg, dict) else {}
+    lo, hi = LAND_RANGE
+    land = float(np.clip(_float(lcfg.get("land_height"), LANDSCAPE_LAND), lo, hi))
+    lo, hi = PEAK_RANGE
+    peak = float(np.clip(_float(lcfg.get("mountain_height"), LANDSCAPE_PEAKS), lo, hi))
+    peak = min(peak, max(0.0, 1.0 - land))  # land + peaks never exceeds 1
+    lo, hi = COVER_RANGE
+    cover = float(np.clip(_float(lcfg.get("mountain_coverage"), LANDSCAPE_COVER), lo, hi))
+    lo, hi = SIZE_RANGE
+    size = float(np.clip(_float(lcfg.get("mountain_size"), LANDSCAPE_SIZE), lo, hi))
     return land, peak, cover, size
 
 
@@ -515,27 +553,156 @@ def compose_landscape(
     persistence=0.5,
     lacunarity=2.0,
     detail_amp=0.4,
+    landscape=None,
     chunk_rows=512,
 ):
-    """Continuous full-map FBM terrain (hills to mountains), no islands.
+    """Continuous inland terrain: near-flat lowland with sparse ranges.
 
-    ``detail_amp`` 0 = flat plain at 0.5, 1 = full-range mountains.
-    Terrain runs off the map edges by default.
+    No sea and no coast: the map is a tile of a larger landmass, so terrain
+    runs off every edge. ``land_height`` is the plain, ``mountain_height``
+    the rise above it, ``mountain_coverage`` the share of the map that is
+    real high ground and ``mountain_size`` how broad one massif is. The
+    mountain stack (mask -> spine -> crest -> dominance) is the island one
+    with the mask living in map coordinates.
     """
-    freq = noise_scale / min(width, height)
+    min_dim = float(min(width, height))
+    land_h, peak_h, cover, msize = landscape_elevation(landscape)
     a = float(np.clip(detail_amp, 0.0, 1.0))
-    out = np.empty((height, width), dtype=np.float32)
-    seed = int(seed)
+    seed = int(seed) & 0xFFFFFFFF
 
+    mtn_freq = LAND_MTN_FREQ / (min_dim * msize)
+    mwarp_freq = LAND_WARP_FREQ / min_dim
+    mwarp_amp = LAND_WARP * min_dim
+    clu_freq = LAND_CLUSTER_FREQ / min_dim
+    ridge_freq = mtn_freq * RIDGE_FREQ
+    spine_freq = mtn_freq * SPINE_FREQ
+    plain_freq = float(noise_scale) / min_dim
+    swell_freq = LAND_SWELL_FREQ / min_dim
+
+    mtn_seed = island_seed(seed, 0x4D4F)
+    mwarp_seed = island_seed(seed, 0x4D57)
+    ridge_seed = island_seed(seed, 0x5247)
+    spine_seed = island_seed(seed, 0x5350)
+    clu_seed = island_seed(seed, 0x434C)
+    plain_seed = island_seed(seed, 0x504C)
+    swell_seed = island_seed(seed, 0x5357)
+
+    want_mtn = peak_h > 1e-6 and cover > 1e-6
+    want_ripple = a > 1e-6
+
+    if want_mtn:
+        # Calibrate the mask on a coarse grid over the whole map: coverage
+        # is the share of the map above mask 0.5, and the flank width comes
+        # from the field's own spread, so it holds at any resolution.
+        sx = np.linspace(0.0, width, LAND_SAMPLES, dtype=np.float32)
+        sy = np.linspace(0.0, height, LAND_SAMPLES, dtype=np.float32)
+        gsx, gsy = np.meshgrid(sx, sy, indexing="xy")
+
+        sp_sample = ridged(
+            gsx * spine_freq, gsy * spine_freq * RANGE_STRETCH,
+            spine_seed, SPINE_OCTAVES, persistence, lacunarity,
+        )
+        s_lo = float(np.quantile(sp_sample, 0.05))
+        s_hi = float(np.quantile(sp_sample, 0.95))
+        if s_hi - s_lo < 1e-6:
+            s_hi = s_lo + 1e-6
+
+        wvx, wvy = _mountain_warp(
+            gsx, gsy, mwarp_freq, mwarp_amp, mwarp_seed, persistence, lacunarity,
+        )
+        m_sample = fbm01(
+            (gsx + wvx) * mtn_freq,
+            (gsy + wvy) * mtn_freq * RANGE_STRETCH,
+            mtn_seed, MASK_OCTAVES, persistence, lacunarity,
+        )
+        c_sample = fbm01(
+            gsx * clu_freq, gsy * clu_freq * RANGE_STRETCH,
+            clu_seed, 2, persistence, lacunarity,
+        )
+        m_sample = m_sample * (CLUSTER_MIN + (1.0 - CLUSTER_MIN) * c_sample)
+        sp_norm = np.clip((sp_sample - s_lo) / (s_hi - s_lo), 0.0, 1.0)
+        m_sample = m_sample * (SPINE_MIN + (1.0 - SPINE_MIN) * sp_norm)
+        r_sample = ridged(
+            gsx * ridge_freq, gsy * ridge_freq * RANGE_STRETCH,
+            ridge_seed, RIDGE_OCTAVES, persistence * CREST_FALLOFF, lacunarity,
+        )
+
+        m_mu = float(m_sample.mean())
+        m_sd = max(float(m_sample.std()), 1e-6)
+        z_mid = _norm_ppf(np.clip(1.0 - cover, 0.005, 0.995))
+        z_lo_raw = _norm_ppf(np.clip(1.0 - cover - 0.5 * MASK_RAMP, 0.005, 0.995))
+        z_hi_raw = _norm_ppf(np.clip(1.0 - cover + 0.5 * MASK_RAMP, 0.005, 0.995))
+        m_width = max(z_hi_raw - z_lo_raw, 0.35)
+        m_foot = z_mid - 0.59 * m_width
+
+        r_lo = float(np.quantile(r_sample, 0.01))
+        r_hi = float(np.quantile(r_sample, 0.99))
+        if r_hi - r_lo < 1e-6:
+            r_hi = r_lo + 1e-6
+        c_lo = float(np.quantile(c_sample, 0.02))
+        c_hi = float(np.quantile(c_sample, 0.98))
+        if c_hi - c_lo < 1e-6:
+            c_hi = c_lo + 1e-6
+
+    out = np.empty((height, width), dtype=np.float32)
+    xs = np.arange(width, dtype=np.float32)
     for y0 in range(0, height, chunk_rows):
         y1 = min(y0 + chunk_rows, height)
         gy, gx = np.meshgrid(
-            np.arange(y0, y1, dtype=np.float64),
-            np.arange(width, dtype=np.float64),
-            indexing="ij",
+            np.arange(y0, y1, dtype=np.float32), xs, indexing="ij",
         )
-        t = fbm01(gx * freq, gy * freq, seed, octaves, persistence, lacunarity)
-        out[y0:y1] = (0.5 + 0.5 * a * (2.0 * t - 1.0)).astype(np.float32)
+
+        # ---- plain: near-flat lowland with gentle rolling relief
+        if want_ripple:
+            p = fbm01(gx * plain_freq, gy * plain_freq, plain_seed, octaves,
+                      persistence, lacunarity)
+            s = fbm01(gx * swell_freq, gy * swell_freq, swell_seed, 2,
+                      persistence, lacunarity)
+            roll = PLAIN_VAR * (2.0 * p - 1.0) + PLAIN_SWELL * (2.0 * s - 1.0)
+            roll = np.where(roll < 0.0, roll * PLAIN_DIP, roll)
+            plain = land_h * (1.0 + a * roll)
+        else:
+            plain = land_h
+
+        # ---- mountains: same mask -> spine -> crest -> dominance stack
+        if want_mtn:
+            wvx, wvy = _mountain_warp(
+                gx, gy, mwarp_freq, mwarp_amp, mwarp_seed, persistence, lacunarity,
+            )
+            m = fbm01(
+                (gx + wvx) * mtn_freq,
+                (gy + wvy) * mtn_freq * RANGE_STRETCH,
+                mtn_seed, MASK_OCTAVES, persistence, lacunarity,
+            )
+            clu = fbm01(
+                gx * clu_freq, gy * clu_freq * RANGE_STRETCH,
+                clu_seed, 2, persistence, lacunarity,
+            )
+            m = m * (CLUSTER_MIN + (1.0 - CLUSTER_MIN) * clu)
+            sp = ridged(
+                gx * spine_freq, gy * spine_freq * RANGE_STRETCH,
+                spine_seed, SPINE_OCTAVES, persistence, lacunarity,
+            )
+            sp = np.clip((sp - s_lo) / (s_hi - s_lo), 0.0, 1.0)
+            m = m * (SPINE_MIN + (1.0 - SPINE_MIN) * sp)
+            u = np.maximum(((m - m_mu) / m_sd - m_foot) / m_width, 0.0)
+            mask = 1.0 - np.exp(-MASK_K * u * u)
+            r = ridged(
+                gx * ridge_freq, gy * ridge_freq * RANGE_STRETCH,
+                ridge_seed, RIDGE_OCTAVES, persistence * CREST_FALLOFF, lacunarity,
+            )
+            rn = (r - r_lo) / (r_hi - r_lo)
+            crest = RIDGE_MIN + (1.0 - RIDGE_MIN) * rn
+            if CREST_POWER != 1.0:
+                crest = np.maximum(crest, 0.0) ** CREST_POWER
+            dom = DOM_MIN + (1.0 - DOM_MIN) * np.clip(
+                (clu - c_lo) / (c_hi - c_lo), 0.0, 1.0)
+            peak = peak_h * mask * crest * dom
+            plain = np.minimum(plain, 1.0 - peak_h)
+        else:
+            peak = 0.0
+
+        out[y0:y1] = (plain + peak).astype(np.float32)
 
     np.clip(out, 0.0, 1.0, out=out)
     return out

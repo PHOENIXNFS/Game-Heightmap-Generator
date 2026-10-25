@@ -297,6 +297,8 @@ window.Preview3D = (function () {
     var gsx = w / 512, gsy = h / 512;
     var rock = new Float32Array(n);
     var wet = new Float32Array(n);
+    var slope = new Float32Array(n);
+    var slSample = [];
     for (y = 0; y < gh; y++) {
       for (x = 0; x < gw; x++) {
         var xl = x > 0 ? x - 1 : x, xr = x < gw - 1 ? x + 1 : x;
@@ -318,9 +320,22 @@ window.Preview3D = (function () {
         var syp = (hsn[i0 + (yu - y) * gw] - hsn[i0 + (yd - y) * gw])
           / (Math.max(yu - yd, 1) * step) * gsy;
         var sl = Math.sqrt(sxp * sxp + syp * syp);
-        var rk = (sl - 0.020) / 0.048;
-        rock[i0] = rk < 0 ? 0 : (rk > 1 ? 1 : rk * rk * (3 - 2 * rk));
+        slope[i0] = sl;
+        if (hs[i0] > sea) slSample.push(sl);
       }
+    }
+    // Rock threshold follows this map's own p99 slope, exactly like the 2D
+    // preview: at the island reference (0.1) it is the old 0.020 .. 0.068.
+    slSample.sort(function (a, b) { return a - b; });
+    var slRef = slSample.length
+      ? slSample[Math.min(slSample.length - 1, Math.floor(slSample.length * 0.99))]
+      : 0.1;
+    if (slRef < 1e-5) slRef = 1e-5;
+    var rockLo = 0.20 * slRef;
+    var rockHi = 0.68 * slRef;
+    for (i = 0; i < n; i++) {
+      var rk = (slope[i] - rockLo) / (rockHi - rockLo);
+      rock[i] = rk < 0 ? 0 : (rk > 1 ? 1 : rk * rk * (3 - 2 * rk));
     }
     // Local mean height: ground below it is a hollow or a valley floor.
     // The window is 2 *map* pixels wide (not 2 grid cells), so the shading

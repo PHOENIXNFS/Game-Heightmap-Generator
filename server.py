@@ -20,6 +20,7 @@ from core.generate import (
     run_job_blocking,
     start_job,
 )
+from core.masks import MASK_KINDS, mask_png
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -125,6 +126,41 @@ def export(
     return Response(
         content=data,
         media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@app.get("/api/masks/{job_id}")
+def masks(
+    job_id: str,
+    kind: str = Query("slope"),
+    steepness: float = Query(0.5),
+):
+    """Companion mask PNG at the heightmap's size. Separate downloads: the
+    heightmap is the product, masks are extras."""
+    job = store.get(job_id)
+    if job is None or job.heights is None:
+        return JSONResponse({"error": "job not found"}, status_code=404)
+    if kind not in MASK_KINDS:
+        return JSONResponse({"error": f"unknown mask: {kind}"}, status_code=400)
+    if kind == "water" and job.cfg["mode"] == "landscape":
+        return JSONResponse(
+            {"error": "water mask needs sea: landscape mode has none"},
+            status_code=400,
+        )
+    try:
+        data = mask_png(
+            kind,
+            job.heights,
+            sea_level=job.cfg["sea_level"],
+            steepness=min(max(steepness, 0.0), 1.0),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    name = f"hmg_{job.heights.shape[1]}x{job.heights.shape[0]}_{kind}.png"
+    return Response(
+        content=data,
+        media_type="image/png",
         headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
 

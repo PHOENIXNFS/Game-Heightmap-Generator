@@ -58,6 +58,15 @@ DEFAULT_CONFIG = {
             "enabled": True,
         }
     ],
+    # Landscape-mode elevation model (no sea, no coast): a near-flat plain
+    # with ranges of mountains rising out of it. Same four knobs as an
+    # island, but they apply to the whole map.
+    "landscape": {
+        "land_height": 0.10,
+        "mountain_height": 0.30,
+        "mountain_coverage": 0.18,
+        "mountain_size": 1.0,
+    },
     "erosion": {
         "enabled": True,
         "droplets": 60000,
@@ -117,6 +126,11 @@ def normalize_config(cfg):
     height = _num(cfg.get("height"), base["height"], MIN_DIM, MAX_DIM, int)
     seed = _num(cfg.get("seed"), base["seed"], 0, 2**31 - 1, int)
     sea = _num(cfg.get("sea_level"), base["sea_level"], 0.0, 1.0)
+    mode = "landscape" if str(cfg.get("mode", "")).lower() == "landscape" else "islands"
+    if mode == "landscape":
+        # An inland tile has no sea: zero the water line so nothing downstream
+        # (export flattening, stats, previews) can treat low ground as ocean.
+        sea = 0.0
 
     n_in = cfg.get("noise")
     if not isinstance(n_in, dict):
@@ -195,14 +209,31 @@ def normalize_config(cfg):
     smoothing["thermal"] = _num(s_in.get("thermal"), smoothing["thermal"], 0.0, 1.0)
     smoothing["blur"] = _num(s_in.get("blur"), smoothing["blur"], 0.0, 1.0)
 
+    l_in = cfg.get("landscape")
+    if not isinstance(l_in, dict):
+        l_in = {}
+    landscape = base["landscape"]
+    landscape["land_height"] = _num(
+        l_in.get("land_height"), landscape["land_height"], *LAND_RANGE)
+    landscape["mountain_height"] = _num(
+        l_in.get("mountain_height"), landscape["mountain_height"], *PEAK_RANGE)
+    landscape["mountain_height"] = min(
+        landscape["mountain_height"],
+        max(0.0, 1.0 - landscape["land_height"]))  # plain + peaks <= 1
+    landscape["mountain_coverage"] = _num(
+        l_in.get("mountain_coverage"), landscape["mountain_coverage"], *COVER_RANGE)
+    landscape["mountain_size"] = _num(
+        l_in.get("mountain_size"), landscape["mountain_size"], *SIZE_RANGE)
+
     return {
         "width": width,
         "height": height,
         "seed": seed,
         "sea_level": sea,
-        "mode": "landscape" if str(cfg.get("mode", "")).lower() == "landscape" else "islands",
+        "mode": mode,
         "noise": noise,
         "islands": islands,
+        "landscape": landscape,
         "erosion": erosion,
         "smoothing": smoothing,
     }
@@ -248,6 +279,7 @@ def run_pipeline(cfg, progress=None):
             persistence=cfg["noise"]["persistence"],
             lacunarity=cfg["noise"]["lacunarity"],
             detail_amp=cfg["noise"]["detail_amp"],
+            landscape=cfg["landscape"],
         )
     else:
         heights = compose_islands(

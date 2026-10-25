@@ -11,6 +11,8 @@
     fullDirty: true,     // config changed since last full generate
     previewSeq: 0,
     previewTimer: null,
+    previewBusy: false,   // a preview request is in flight
+    previewPending: false, // config changed while busy: render again after
     statusTimer: null,
     selected: 0,
     heights: null,
@@ -23,11 +25,20 @@
   function applyToUI(cfg) {
     state.config = cfg;
     ensureIslandFields();
+    ensureLandscapeFields();
     $("seed").value = cfg.seed;
     $("mode").value = cfg.mode;
     syncFullRes(cfg.width, cfg.height);
     $("sea-level").value = cfg.sea_level;
     $("sea-level-val").textContent = Number(cfg.sea_level).toFixed(3);
+    $("land-height").value = cfg.landscape.land_height;
+    $("land-height-val").textContent = Number(cfg.landscape.land_height).toFixed(3);
+    $("land-peak").value = cfg.landscape.mountain_height;
+    $("land-peak-val").textContent = Number(cfg.landscape.mountain_height).toFixed(2);
+    $("land-cover").value = cfg.landscape.mountain_coverage;
+    $("land-cover-val").textContent = Number(cfg.landscape.mountain_coverage).toFixed(2);
+    $("land-msize").value = cfg.landscape.mountain_size;
+    $("land-msize-val").textContent = Number(cfg.landscape.mountain_size).toFixed(2);
     $("noise-scale").value = cfg.noise.scale;
     $("noise-scale-val").textContent = Number(cfg.noise.scale).toFixed(1);
     $("detail-amp").value = cfg.noise.detail_amp;
@@ -60,6 +71,11 @@
     cfg.width = fr.w;
     cfg.height = fr.h;
     cfg.sea_level = Number($("sea-level").value);
+    ensureLandscapeFields();
+    cfg.landscape.land_height = Number($("land-height").value);
+    cfg.landscape.mountain_height = Number($("land-peak").value);
+    cfg.landscape.mountain_coverage = Number($("land-cover").value);
+    cfg.landscape.mountain_size = Number($("land-msize").value);
     cfg.noise.scale = Number($("noise-scale").value);
     cfg.noise.detail_amp = Number($("detail-amp").value);
     cfg.noise.coast_warp = Number($("coast-warp").value);
@@ -160,14 +176,52 @@
     }
   }
 
+  /* Landscape elevation model. Legacy saved configs predate the block, so
+     fill it in rather than letting readUI write into undefined. */
+  var LANDSCAPE_DEFAULTS = {
+    land_height: 0.10,
+    mountain_height: 0.30,
+    mountain_coverage: 0.18,
+    mountain_size: 1.0
+  };
+
+  function ensureLandscapeFields() {
+    var l = state.config.landscape;
+    if (!l || typeof l !== "object") l = state.config.landscape = {};
+    Object.keys(LANDSCAPE_DEFAULTS).forEach(function (k) {
+      if (typeof l[k] !== "number" || !isFinite(l[k])) l[k] = LANDSCAPE_DEFAULTS[k];
+    });
+    return l;
+  }
+
   function updateModeUI() {
     var isl = $("islands-panel");
     var islands = state.config.mode === "islands";
     isl.style.display = islands ? "" : "none";
+    var land = $("landscape-panel");
+    if (land) land.style.display = islands ? "none" : "";
     var seedField = $("global-seed-field");
     if (seedField) seedField.style.display = islands ? "none" : ""; // islands carry their own seeds
     var seaRow = $("sea-level-row");
     if (seaRow) seaRow.style.display = islands ? "" : "none";
+    // Coast roughness only shapes island shorelines; landscape has no coast.
+    var coastRow = $("coast-warp-row");
+    if (coastRow) coastRow.style.display = islands ? "" : "none";
+    // The same slider means fine relief on an island and lowland roll on a
+    // landscape tile, so name it for what it does in the current mode.
+    var dlabel = $("detail-amp-label");
+    if (dlabel) {
+      dlabel.textContent = islands ? "Terrain detail" : "Plain roll";
+      dlabel.title = islands
+        ? "Amplitude of fine noise detail"
+        : "How much the lowland rolls up and down around the plain height";
+    }
+    var hint = $("stats-hint");
+    if (hint) {
+      hint.textContent = islands
+        ? "\u2022 min / max / mean height and land % above sea level"
+        : "\u2022 min / max / mean height of the tile";
+    }
     if (window.Preview2D) Preview2D.setConfig(state.config);
   }
 
@@ -489,21 +543,34 @@
   function schedulePreview(immediate) {
     if (state.previewTimer) clearTimeout(state.previewTimer);
     if (immediate) {
-      runPreview();
+      state.previewTimer = null;
+      requestPreview();
     } else {
-      state.previewTimer = setTimeout(runPreview, 350);
+      state.previewTimer = setTimeout(requestPreview, 350);
     }
   }
 
-  function runPreview() {
+  /* One preview at a time. While a render is in flight, further changes only
+     mark the newest config as pending, so dragging a slider queues one
+     follow-up instead of a row of 5-second jobs. */
+  function requestPreview() {
     if (state.previewTimer) {
       clearTimeout(state.previewTimer);
       state.previewTimer = null;
     }
+    if (state.previewBusy) {
+      state.previewPending = true;
+      return;
+    }
+    runPreview();
+  }
+
+  function runPreview() {
     readUI();
     var seq = ++state.previewSeq;
     var size = parseInt($("preview-res").value, 10) || 512;
     var cfg = JSON.parse(JSON.stringify(state.config));
+    state.previewBusy = true;
     $("preview-ms").textContent = "preview \u2026";
     fetch("/api/preview?size=" + size, {
       method: "POST",
@@ -528,23 +595,39 @@
             state.lastW = job.width;
             state.lastH = job.height;
             Preview2D.draw(arr, job.width, job.height, state.config);
-            Preview3D.draw(arr, job.width, job.height, state.config.sea_level);
+            Preview3D.draw(arr, job.width, job.height, previewSea());
             showStats(job);
           });
       })
       .catch(function (e) {
         if (seq !== state.previewSeq) return;
         $("stats-line").textContent = "preview error: " + e;
+      })
+      .then(function () {
+        state.previewBusy = false;
+        if (state.previewPending) {
+          state.previewPending = false;
+          requestPreview();
+        }
       });
+  }
+
+  /* Landscape has no sea, whatever the (hidden) sea-level slider still says:
+     previews must never paint water on an inland tile. */
+  function previewSea() {
+    return state.config.mode === "landscape" ? 0 : Number(state.config.sea_level);
   }
 
   function showStats(job) {
     var s = job.stats;
     if (!s) return;
-    $("stats-line").textContent =
-      "min " + s.min.toFixed(3) + " \u00b7 max " + s.max.toFixed(3) +
-      " \u00b7 mean " + s.mean.toFixed(3) +
-      " \u00b7 land " + (s.land_frac * 100).toFixed(1) + "%";
+    var line = "min " + s.min.toFixed(3) + " \u00b7 max " + s.max.toFixed(3) +
+      " \u00b7 mean " + s.mean.toFixed(3);
+    // No sea on an inland tile, so a land percentage would always read 100%.
+    if (state.config.mode !== "landscape") {
+      line += " \u00b7 land " + (s.land_frac * 100).toFixed(1) + "%";
+    }
+    $("stats-line").textContent = line;
     $("preview-ms").textContent =
       "preview " + job.width + "\u00d7" + job.height + " in " + job.ms + "ms";
   }
@@ -601,6 +684,35 @@
     $("export-png16").disabled = !on;
     $("export-raw16").disabled = !on;
     $("export-exr").disabled = !on;
+    // Masks are companions to the same full-res render. Water needs a sea,
+    // so it stays off in landscape mode.
+    $("mask-slope").disabled = !on;
+    $("mask-water").disabled = !(on && state.config.mode !== "landscape");
+  }
+
+  /* Masks are separate downloads at the heightmap's size, not a bundle. */
+  function downloadMask(kind) {
+    if (!state.fullId) return;
+    var url = "/api/masks/" + state.fullId + "?kind=" + kind +
+      "&steepness=" + encodeURIComponent($("mask-steepness").value);
+    fetch(url)
+      .then(function (r) {
+        if (!r.ok) throw new Error("mask failed " + r.status);
+        return r.blob();
+      })
+      .then(function (b) {
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(b);
+        a.download = "hmg_" + state.config.width + "x" + state.config.height +
+          "_" + kind + ".png";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+      })
+      .catch(function (e) {
+        $("preview-ms").textContent = String(e);
+      });
   }
 
   function exportAs(fmt) {
@@ -670,6 +782,11 @@
                 if (Object.prototype.hasOwnProperty.call(cfg.smoothing, k3)) base.smoothing[k3] = cfg.smoothing[k3];
               }
             }
+            if (cfg.landscape) {
+              for (var k4 in cfg.landscape) {
+                if (Object.prototype.hasOwnProperty.call(cfg.landscape, k4)) base.landscape[k4] = cfg.landscape[k4];
+              }
+            }
             if (Array.isArray(cfg.islands) && cfg.islands.length) base.islands = cfg.islands;
             applyToUI(base);
             changed();
@@ -697,6 +814,9 @@
     $("export-png16").addEventListener("click", function () { exportAs("png16"); });
     $("export-raw16").addEventListener("click", function () { exportAs("raw16"); });
     $("export-exr").addEventListener("click", function () { exportAs("exr"); });
+    $("mask-water").addEventListener("click", function () { downloadMask("water"); });
+    $("mask-slope").addEventListener("click", function () { downloadMask("slope"); });
+    bindSlider("mask-steepness", "mask-steepness-val", 2, function () {});
     $("save-cfg").addEventListener("click", saveConfig);
     $("load-cfg").addEventListener("click", function () { $("load-cfg-file").click(); });
     $("load-cfg-file").addEventListener("change", function () {
@@ -738,6 +858,10 @@
     $("custom-w").addEventListener("change", normalizeCustomSize);
     $("custom-h").addEventListener("change", normalizeCustomSize);
     bindSlider("sea-level", "sea-level-val", 3, function () { changed(); });
+    bindSlider("land-height", "land-height-val", 3, function () { changed(); });
+    bindSlider("land-peak", "land-peak-val", 2, function () { changed(); });
+    bindSlider("land-cover", "land-cover-val", 2, function () { changed(); });
+    bindSlider("land-msize", "land-msize-val", 2, function () { changed(); });
     bindSlider("noise-scale", "noise-scale-val", 1, function () { changed(); });
     bindSlider("detail-amp", "detail-amp-val", 2, function () { changed(); });
     bindSlider("coast-warp", "coast-warp-val", 2, function () { changed(); });

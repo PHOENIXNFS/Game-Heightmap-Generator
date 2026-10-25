@@ -8,7 +8,7 @@
 </head>
 <body>
 <header id="topbar">
-  <span id="app-title" title="Terrain Heightmap Generator — make UE5 heightmaps (PNG16 / RAW r16 / EXR)">Terrain Heightmap Generator</span>
+  <span id="app-title" title="Terrain Heightmap Generator — make terrain heightmaps (PNG16 / RAW r16 / EXR)">Terrain Heightmap Generator</span>
   <span id="global-seed-field" class="hdr-field">
     <label class="hdr-field">Seed <input type="number" id="seed" value="1337" min="0" step="1" title="Global seed for landscape terrain and its erosion — hidden in islands mode, where every island has its own seed"></label>
     <button id="seed-random" title="Pick a new random seed">&#x21bb;</button>
@@ -74,6 +74,30 @@
       </div>
     </section>
 
+    <section class="panel" id="landscape-panel" style="display:none">
+      <h2>LANDSCAPE <span class="hint">• one continuous inland tile: plains with ranges rising out of them</span></h2>
+      <div class="row slider-row">
+        <label for="land-height" title="Absolute height of the flat lowland — the ground most of the map sits at">Plain height</label>
+        <input type="range" id="land-height" min="0.02" max="0.6" step="0.005" value="0.1">
+        <output id="land-height-val">0.100</output>
+      </div>
+      <div class="row slider-row">
+        <label for="land-peak" title="How far the ranges rise above the plain">Mountain height</label>
+        <input type="range" id="land-peak" min="0" max="0.6" step="0.01" value="0.3">
+        <output id="land-peak-val">0.30</output>
+      </div>
+      <div class="row slider-row">
+        <label for="land-cover" title="How much of the map gets high ground (0 = endless plain, 1 = mountains everywhere)">Mountain coverage</label>
+        <input type="range" id="land-cover" min="0" max="1" step="0.01" value="0.18">
+        <output id="land-cover-val">0.18</output>
+      </div>
+      <div class="row slider-row">
+        <label for="land-msize" title="How broad each range is — scattered hills up to one big massif">Mountain size</label>
+        <input type="range" id="land-msize" min="0.6" max="2" step="0.05" value="1">
+        <output id="land-msize-val">1.00</output>
+      </div>
+    </section>
+
     <section class="panel" id="islands-panel">
       <h2>ISLANDS <button id="island-add" class="small" title="Add a new island">+ add</button> <button id="island-reroll" class="small" title="Give every island a new random seed (each island keeps its own seed otherwise)">&#x21bb; seeds</button> <span class="hint">• drag island bodies/handles in the 2D preview; click an island card to select it</span></h2>
       <div id="island-list"></div>
@@ -87,11 +111,11 @@
         <output id="noise-scale-val">2.5</output>
       </div>
       <div class="row slider-row">
-        <label for="detail-amp" title="Amplitude of fine noise detail">Terrain detail</label>
+        <label for="detail-amp" id="detail-amp-label" title="Amplitude of fine noise detail">Terrain detail</label>
         <input type="range" id="detail-amp" min="0" max="1" step="0.01" value="0.4">
         <output id="detail-amp-val">0.40</output>
       </div>
-      <div class="row slider-row">
+      <div class="row slider-row" id="coast-warp-row">
         <label for="coast-warp" title="How much the coastline warps in and out">Coast roughness</label>
         <input type="range" id="coast-warp" min="0" max="1" step="0.01" value="0.35">
         <output id="coast-warp-val">0.35</output>
@@ -138,8 +162,21 @@
       </div>
     </section>
 
+    <section class="panel" id="masks-panel">
+      <h2>MASKS <span class="hint">• extra 8-bit PNGs at the full-res size, after Generate Full Res</span></h2>
+      <div class="row slider-row">
+        <label for="mask-steepness" title="How steep ground must be to count as rock — relative to this map, no world units">Steepness</label>
+        <input type="range" id="mask-steepness" min="0" max="1" step="0.01" value="0.5">
+        <output id="mask-steepness-val">0.50</output>
+      </div>
+      <div class="row">
+        <button id="mask-water" disabled title="Download the water mask: 255 below sea level, 0 on land (islands only)">Water mask</button>
+        <button id="mask-slope" disabled title="Download the slope mask: 255 on steep ground, 0 on flats">Slope mask</button>
+      </div>
+    </section>
+
     <section class="panel">
-      <h2>STATS <span class="hint">• min / max / mean height and land % above sea level</span></h2>
+      <h2>STATS <span class="hint" id="stats-hint">• min / max / mean height and land % above sea level</span></h2>
       <div id="stats-line">no preview yet</div>
       <div id="preview-ms"></div>
     </section>
@@ -157,8 +194,8 @@
     </section>
 </main>
 
-<script src="/preview2d.js?v=14"></script>
-<script src="/preview3d.js?v=8"></script>
-<script src="/app.js?v=16"></script>
+<script src="/preview2d.js?v=16"></script>
+<script src="/preview3d.js?v=9"></script>
+<script src="/app.js?v=18"></script>
 </body>
 </html>

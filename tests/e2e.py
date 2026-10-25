@@ -65,6 +65,10 @@ def main():
     check("full-res dropdown present",
           b'id="full-res"' in raw and b'id="preview-res"' in raw
           and b'id="custom-w"' in raw and b'id="custom-h"' in raw)
+    check("landscape panel present",
+          b'id="landscape-panel"' in raw
+          and all((b'id="' + k + b'"') in raw for k in
+                  (b"land-height", b"land-peak", b"land-cover", b"land-msize")))
     for asset in ("/style.css", "/app.js", "/preview2d.js", "/preview3d.js"):
         st, _, raw = req(asset)
         check(f"{asset} served", st == 200 and len(raw) > 500)
@@ -82,6 +86,10 @@ def main():
     check("defaults smoothing block", isinstance(dc.get("smoothing"), dict)
           and all(isinstance(v, (int, float)) and 0.0 <= v <= 1.0
                   for v in dc["smoothing"].values()))
+    check("defaults landscape block", isinstance(dc.get("landscape"), dict)
+          and all(isinstance(dc["landscape"].get(k), (int, float))
+                  for k in ("land_height", "mountain_height",
+                            "mountain_coverage", "mountain_size")))
     st, _, raw = req("/api/preview", {"config": {"smoothing": "junk"}}, timeout=120)
     check("malformed smoothing no crash", st == 200 and json.loads(raw)["status"] == "done")
 
@@ -504,6 +512,35 @@ def main():
     st, _, raw = req(f"/api/export/{jid}?format=png16&sea_mode=bogus")
     check("bad sea_mode rejected", st == 400)
 
+    print("== masks ==")
+    st, hds, raw = req(f"/api/masks/{jid}?kind=water")
+    check("water mask png", st == 200 and raw[:8] == b"\x89PNG\r\n\x1a\n", f"status {st}")
+    wm = Image.open(io.BytesIO(raw))
+    check("water mask 8-bit at full size",
+          wm.mode == "L" and wm.size == (w, hh), f"{wm.mode} {wm.size}")
+    wmask = np.array(wm) > 127
+    check("water mask matches sea level",
+          bool(np.array_equal(wmask, arr < CONFIG["sea_level"])))
+    check("water mask filename", "water" in (hds.get("Content-Disposition") or ""))
+
+    st, hds, raw = req(f"/api/masks/{jid}?kind=slope&steepness=0.5")
+    check("slope mask png", st == 200 and raw[:8] == b"\x89PNG\r\n\x1a\n", f"status {st}")
+    sm = Image.open(io.BytesIO(raw))
+    check("slope mask 8-bit at full size",
+          sm.mode == "L" and sm.size == (w, hh), f"{sm.mode} {sm.size}")
+    loose = np.array(sm) > 127
+    st, _, raw = req(f"/api/masks/{jid}?kind=slope&steepness=1.0")
+    tight = np.array(Image.open(io.BytesIO(raw))) > 127
+    check("slope mask steepness shrinks rock",
+          st == 200 and int(tight.sum()) < int(loose.sum()),
+          f"{int(tight.sum())} vs {int(loose.sum())}")
+    check("slope mask only on land", not bool(loose[arr < CONFIG["sea_level"]].any()))
+
+    st, _, _ = req(f"/api/masks/{jid}?kind=bogus")
+    check("bad mask kind rejected", st == 400)
+    st, _, _ = req("/api/masks/deadbeef?kind=water")
+    check("missing mask job 404", st == 404)
+
     # sea modes
     st, _, raw = req(f"/api/export/{jid}?format=raw16&sea_mode=flatten")
     fa = np.frombuffer(raw, "<u2").astype(np.float64).reshape(hh, w) / 65535.0
@@ -518,16 +555,52 @@ def main():
           if (arr < CONFIG["sea_level"]).any() else True)
 
     print("== landscape mode ==")
-    cfg_land = dict(CONFIG, mode="landscape", sea_level=0.0, islands=[])
+    # sea_level is deliberately non-zero here: landscape has no sea, so the
+    # pipeline must ignore it (an inland tile has no water line at all).
+    cfg_land = dict(CONFIG, mode="landscape", sea_level=0.15, islands=[])
     st, _, raw = req("/api/preview", {"config": cfg_land}, timeout=240)
     pl = json.loads(raw)
     check("landscape preview ok", st == 200 and pl["status"] == "done", str(pl))
     st, hds, raw = req(f"/api/heights/{pl['id']}")
     w2, h2 = int(hds.get("X-Width")), int(hds.get("X-Height"))
     la = np.frombuffer(raw, "<f4").reshape(h2, w2)
+    edges = np.concatenate([la[0], la[-1], la[:, 0], la[:, -1]])
     check("landscape terrain runs off edges",
-          float(max(la[0].max(), la[-1].max(), la[:, 0].max(), la[:, -1].max())) > 0.2)
+          float(edges.min()) > 0.02 and float(edges.mean()) > 0.6 * float(la.mean()),
+          f"edge min={edges.min():.3f} mean={edges.mean():.3f} map mean={la.mean():.3f}")
     check("landscape range sane", float(la.min()) >= 0 and float(la.max()) <= 1.0001)
+    p50, p99 = np.percentile(la, [50, 99])
+    check("landscape has lowland plus high ground",
+          float(p50) < 0.2 and float(p99) > float(p50) + 0.1,
+          f"p50={p50:.3f} p99={p99:.3f}")
+    check("landscape ignores sea level",
+          abs(float(pl["stats"]["land_frac"]) - 1.0) < 1e-6, str(pl.get("stats")))
+    st, _, raw = req(f"/api/masks/{pl['id']}?kind=water")
+    check("water mask refused in landscape", st == 400, str(raw[:120]))
+    st, _, raw = req(f"/api/masks/{pl['id']}?kind=slope&steepness=0.5")
+    check("slope mask works in landscape",
+          st == 200 and raw[:8] == b"\x89PNG\r\n\x1a\n", f"status {st}")
+
+    st, _, raw = req("/api/preview", {"config": dict(cfg_land, landscape={
+        "land_height": 0.10, "mountain_height": 0.0,
+        "mountain_coverage": 0.18, "mountain_size": 1.0})}, timeout=240)
+    pf = json.loads(raw)
+    check("landscape without mountains stays low",
+          pf["status"] == "done" and float(pf["stats"]["max"]) < 0.2, str(pf.get("stats")))
+
+    st, _, raw = req("/api/preview", {"config": dict(cfg_land, landscape={
+        "land_height": 0.10, "mountain_height": 0.30,
+        "mountain_coverage": 0.60, "mountain_size": 1.0})}, timeout=240)
+    pc = json.loads(raw)
+    check("landscape coverage raises high ground",
+          float(pc["stats"]["mean"]) > float(pl["stats"]["mean"]),
+          f"{pc['stats']['mean']:.3f} vs {pl['stats']['mean']:.3f}")
+
+    st, _, raw = req("/api/preview", {"config": cfg_land}, timeout=240)
+    pl2 = json.loads(raw)
+    st, hds, raw = req(f"/api/heights/{pl2['id']}")
+    lb = np.frombuffer(raw, "<f4").reshape(int(hds.get("X-Height")), int(hds.get("X-Width")))
+    check("landscape deterministic", bool(np.array_equal(la, lb)))
 
     st, _, raw = req("/api/preview", {"config": dict(CONFIG, mode="bogus")}, timeout=240)
     pb2 = json.loads(raw)
