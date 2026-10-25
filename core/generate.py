@@ -37,7 +37,7 @@ DEFAULT_CONFIG = {
         "persistence": 0.5,
         "lacunarity": 2.0,
         "detail_amp": 0.4,
-        "coast_warp": 0.35,
+        "coast_warp": 0.15,
         "edge_margin": 0.04,
     },
     "islands": [
@@ -51,8 +51,8 @@ DEFAULT_CONFIG = {
             # Elevation model: a flat plain at land_height with ranges of
             # mountains above it; coverage 0 = flat atoll, 1 = all mountains,
             # mountain_size scales how broad a single massif is.
-            "land_height": 0.12,
-            "mountain_height": 0.30,
+            "land_height": 0.085,
+            "mountain_height": 0.15,
             "mountain_coverage": 0.20,
             "mountain_size": 1.0,
             "enabled": True,
