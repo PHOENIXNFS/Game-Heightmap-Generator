@@ -81,6 +81,10 @@ def main():
     check("defaults island has elevation fields",
           all(isinstance(isl0.get(k), (int, float))
               for k in ("land_height", "mountain_height", "mountain_coverage")))
+    check("defaults island has its own shape variety",
+          isinstance(isl0.get("shape_variety"), (int, float)))
+    check("defaults island has its own coast slope",
+          isinstance(isl0.get("coast_slope"), (int, float)))
     check("defaults has no elevation field", "elevation" not in isl0)
     dc = defaults["config"]
     check("defaults smoothing block", isinstance(dc.get("smoothing"), dict)
@@ -226,6 +230,115 @@ def main():
     xs = np.arange(64, 128, dtype=np.float64)[None, :] * np.ones((64, 1))
     ys = np.arange(64, 128, dtype=np.float64)[:, None] * np.ones((1, 64))
     check("fbm deterministic", float(np.abs(fbm(xs, ys, 4242) - fbm(xs, ys, 4242)).max()) == 0.0)
+
+    # coast slider: 0 = sharp drop at the waterline, 1 = gentle slope,
+    # and each island carries its own.
+    def shore_p50(arr, sea):
+        min_dim = float(min(arr.shape))
+        gy, gx = np.gradient(arr.astype(np.float64))
+        g = np.hypot(gx, gy) * min_dim
+        land = arr > sea
+
+        def dil(m):
+            o = m.copy()
+            o[1:, :] |= m[:-1, :]
+            o[:-1, :] |= m[1:, :]
+            o[:, 1:] |= m[:, :-1]
+            o[:, :-1] |= m[:, 1:]
+            return o
+
+        ring = dil(land) & dil(~land)
+        vals = g[ring & land]
+        return float(np.median(vals)) if vals.size else 0.0
+
+    sea = CONFIG["sea_level"]
+    g_sharp = shore_p50(preview_arr(dict(
+        CONFIG, islands=[dict(ISLANDS[0], coast_slope=0.0)],
+        smoothing=no_post, erosion=no_ero)), sea)
+    g_slope = shore_p50(preview_arr(dict(
+        CONFIG, islands=[dict(ISLANDS[0], coast_slope=1.0)],
+        smoothing=no_post, erosion=no_ero)), sea)
+    check("coast slider: slope is gentler than sharp",
+          g_slope < g_sharp * 0.75, f"sharp {g_sharp:.2f} -> slope {g_slope:.2f}")
+
+    # same map, two settings: island 0 sharp, island 1 gentle
+    mixed = preview_arr(dict(
+        CONFIG,
+        islands=[dict(ISLANDS[0], coast_slope=0.0),
+                 dict(ISLANDS[1], coast_slope=1.0),
+                 dict(ISLANDS[2], coast_slope=1.0)],
+        smoothing=no_post, erosion=no_ero))
+    box_a = (slice(80, 300), slice(60, 250))
+    box_b = (slice(220, 400), slice(280, 470))  # island 1 only: island 0's
+    # compute box ends at x 256, so this region is untouched by it
+    check("one map, sharp island and gentle island coexist",
+          shore_p50(mixed[box_a[0], box_a[1]], sea)
+          > 2.0 * shore_p50(mixed[box_b[0], box_b[1]], sea),
+          f"A {shore_p50(mixed[box_a[0], box_a[1]], sea):.2f} "
+          f"B {shore_p50(mixed[box_b[0], box_b[1]], sea):.2f}")
+
+    # changing island 0's coast must not touch island 1
+    other = preview_arr(dict(
+        CONFIG,
+        islands=[dict(ISLANDS[0], coast_slope=1.0),
+                 dict(ISLANDS[1], coast_slope=1.0),
+                 dict(ISLANDS[2], coast_slope=1.0)],
+        smoothing=no_post, erosion=no_ero))
+    check("coast slider is per island (neighbour untouched)",
+          float(np.abs(mixed[box_b[0], box_b[1]]
+                       - other[box_b[0], box_b[1]]).max()) == 0.0)
+    check("coast slider changes its own island",
+          float(np.abs(mixed[box_a[0], box_a[1]]
+                       - other[box_a[0], box_a[1]]).max()) > 1e-4)
+
+    # shape variety: 0 = round footprint, 1 = strongly lobed — and it too
+    # belongs to the island it sits on.
+    def radius_cv(arr, sea_, cx, cy, rad):
+        land = arr > sea_
+        ys, xs = np.nonzero(land)
+        dx = xs - cx * arr.shape[1]
+        dy = ys - cy * arr.shape[0]
+        keep = dx * dx + dy * dy <= (rad * min(arr.shape) * 2.2) ** 2
+        th = np.arctan2(dy[keep], dx[keep])
+        r = np.hypot(dx[keep], dy[keep])
+        bins = np.linspace(-np.pi, np.pi, 33)
+        idx = np.clip(np.digitize(th, bins) - 1, 0, 31)
+        prof = np.array([r[idx == b].max() if (idx == b).any() else 0.0
+                         for b in range(32)])
+        nz = prof[prof > 0]
+        if nz.size < 24:
+            return 0.0
+        prof[prof == 0] = nz.mean()
+        prof = prof / prof.mean()
+        return float(prof.std())
+
+    no_roll = {**CONFIG["noise"], "detail_amp": 0.0}
+    isl = dict(ISLANDS[0], mountain_height=0.0, mountain_coverage=0.0)
+    cv_round = radius_cv(preview_arr(dict(
+        CONFIG, noise=no_roll, islands=[dict(isl, shape_variety=0.0)],
+        smoothing=no_post, erosion=no_ero)), sea,
+        isl["cx"], isl["cy"], isl["radius"])
+    cv_lobed = radius_cv(preview_arr(dict(
+        CONFIG, noise=no_roll, islands=[dict(isl, shape_variety=1.0)],
+        smoothing=no_post, erosion=no_ero)), sea,
+        isl["cx"], isl["cy"], isl["radius"])
+    check("shape variety: 0 is round, 1 is lobed",
+          cv_lobed > cv_round * 1.15, f"cv {cv_round:.3f} -> {cv_lobed:.3f}")
+
+    # two islands far apart: editing one's shape must not move the other
+    far_pair = [dict(ISLANDS[0], cx=0.16, cy=0.50, radius=0.16, shape_variety=0.0),
+                dict(ISLANDS[1], cx=0.84, cy=0.50, radius=0.16, shape_variety=1.0)]
+    va = preview_arr(dict(CONFIG, islands=far_pair,
+                          smoothing=no_post, erosion=no_ero))
+    vb = preview_arr(dict(CONFIG,
+                          islands=[dict(far_pair[0], shape_variety=1.0), far_pair[1]],
+                          smoothing=no_post, erosion=no_ero))
+    box_b = (slice(180, 330), slice(350, 480))
+    box_a = (slice(180, 330), slice(25, 160))
+    check("shape variety is per island (neighbour untouched)",
+          float(np.abs(va[box_b] - vb[box_b]).max()) == 0.0)
+    check("shape variety changes its own island",
+          float(np.abs(va[box_a] - vb[box_a]).max()) > 1e-4)
 
     print("== flat land + sparse mountains ==")
 
@@ -492,10 +605,12 @@ def main():
     want = np.round(np.clip(arr, 0, 1) * 65535)
     check("png16 values exact",
           img is not None and int(np.abs(np.array(img).astype(np.float64) - want).max()) <= 1)
-    check("png16 filename", "png16" in (hds.get("Content-Disposition") or ""))
+    check("png16 filename", ".png" in (hds.get("Content-Disposition") or "")
+          and "hmg_" in (hds.get("Content-Disposition") or ""))
 
     st, hds, raw = req(f"/api/export/{jid}?format=raw16&sea_mode=keep")
     check("raw size", st == 200 and len(raw) == w * hh * 2)
+    check("raw16 filename", ".raw" in (hds.get("Content-Disposition") or ""))
     ra = np.frombuffer(raw, "<u2").astype(np.float64).reshape(hh, w)
     check("raw values match", int(np.abs(ra - np.round(np.clip(arr, 0, 1) * 65535)).max()) <= 1)
 

@@ -12,11 +12,18 @@ dome:
   how broad a single massif is. Ridged noise carves crests on top of a wide
   foothill apron, so peaks grow out of the plain instead of being planted
   on it. Coverage 0 = flat atoll, 1 = mountains everywhere.
-* **coast** — the warped elliptical distance ``d`` (0 at the center,
-  1 at the rim) decides only *where* the island is. The shore band's
-  width varies around the island; land keeps its height across most
-  of the band, drops through sea level, then eases into a shelf. The
-  rim sits at the seabed, so no island ends in a cliff.
+* **coast** — the warped radial distance ``d`` (0 at the center,
+  1 at the rim) decides only *where* the island is. The rim is not a
+  plain circle: a seed-derived Fourier series modulates the radius, so
+  every island gets its own lobed footprint (bays, peninsulas, spurs),
+  and multi-octave noise adds fine crenulation. The shore band's width
+  varies around the island, and each island sets its own band width from
+  its ``coast_slope``: 0 keeps the band short, so the land falls to the
+  sea over a few pixels (sharp drop), 1 stretches it into a long ramp
+  (gentle slope). The band is laid out around a fixed shoreline radius,
+  so lengthening it changes the steepness without moving the waterline.
+  Land keeps its height across most of the band, drops through sea level,
+  then eases into a shelf, so no island ends in a cliff.
 
 Heights are absolute (not sea-relative), so the sea-level slider still
 floods land: raising it eats into the shore band and then the plain.
@@ -32,24 +39,67 @@ import numpy as np
 from .noise import fbm, fbm01, island_seed, ridged
 
 MAX_ISLANDS = 64
-# Elevation pushed outside the rim so the seabed sits below any sea level.
-SINK = 0.18
+# Seabed depth outside the rim, as a multiple of the island's own plain
+# height. Scaling it with the island (instead of using a fixed depth) keeps
+# the shore slope proportional: the waterline always falls at the same
+# fraction of the shore band, so tall and low islands both get a beach-like
+# ramp instead of a tall island getting a cliff and a low one a shelf.
+SINK_RATIO = 0.45
+# Absolute floor so the seabed always sits below zero (and hence below any
+# sea level), even for very low islands.
+SINK_MIN = 0.01
 # Shore band: width as a fraction of the island radius, varying between
-# these two values around the island (noise-driven).
-SHORE_MIN = 0.035
-SHORE_MAX = 0.25
+# two values around the island (noise-driven). The per-island
+# ``coast_slope`` slider (0 = sharp drop, 1 = gentle slope) interpolates
+# between two regimes: SHARP_* keeps the band short, so land falls to the
+# sea over a few pixels and the coast reads as a cliff; SHORE_* stretches
+# it into a wide ramp, so the same island ends in a long beach. SHORE_*
+# is the gentle end (and the fallback default's neighbourhood).
+SHORE_MIN = 0.55
+SHORE_MAX = 0.75
+SHARP_SHORE_MIN = 0.06
+SHARP_SHORE_MAX = 0.16
+# Fallback shoreline for islands (or direct callers) that carry none.
+# 0.5 sits just past the old fixed band: a fresh island keeps most of its
+# flat plain while reading a little gentler, and the slider can pull it
+# either way — 0 is a cliff at the waterline, 1 a long beach ramp.
+DEFAULT_COAST_SLOPE = 0.5
+# Nominal radius (in island-normalized distance) where the shore profile
+# crosses height 0 — the terrain's own shoreline. The band is laid out
+# around that point, so coast_slope trades steepness for length without
+# moving the shoreline: dragging the slider to "slope" lengthens the ramp
+# instead of shrinking the island.
+WATERLINE = 0.85
+# How much of each end of the shore band is spent easing in/out, per
+# regime. The gentle end eases over a quarter of the band so the middle
+# runs at one constant slope; the sharp end is nearly a straight ramp.
+SHORE_EASE_MIN = 0.05
+SHORE_EASE_MAX = 0.30
 SHORE_FREQ = 1.4
 # Fine coastline warp: octave bands that make the shore fractal instead of
 # a smooth blob (fractions of the island radius). Amplitudes are in the
 # same units as the radial distance, so 0.06 moves the shore ~0.06 * r.
 COAST_FINE = 0.090
 COAST_FINE_FREQ = 3.4
-COAST_FINE2 = 0.060
+COAST_FINE2 = 0.070
 COAST_FINE2_FREQ = 11.0
-COAST_FINE3 = 0.090
+COAST_FINE3 = 0.070
 COAST_FINE3_FREQ = 26.0
-# Where in the shore band the land has fully dropped to the shelf.
-COAST_LAND_EDGE = 0.62
+COAST_FINE4 = 0.025
+COAST_FINE4_FREQ = 48.0
+# Island footprint shape: instead of a plain circle/ellipse, the rim radius
+# is modulated by a seed-derived Fourier series in the local angle. The
+# series has mean radius 1 (so footprint area stays comparable across
+# varieties) and is clamped, so lobes bulge a little past the nominal radius
+# circle without running away. ``shape_variety`` (0..1) scales the
+# harmonics: 0 = perfect circle, 1 = strongly lobed. Each island derives its
+# own coefficients from its seed, so rerolling a seed reshapes that island.
+SHAPE_HARMONICS = (2, 3, 4, 5, 6, 7)
+SHAPE_AMP = 0.30
+SHAPE_MIN = 0.32
+SHAPE_MAX = 1.45
+# Default shape variety when the caller omits it.
+DEFAULT_SHAPE_VARIETY = 0.55
 # Lowland relief, as a fraction of land_height at detail_amp = 1:
 # PLAIN_VAR is the rolling rise/fall, PLAIN_SWELL a broad positive tilt
 # across the island, PLAIN_DROP the fall toward the coast.
@@ -149,6 +199,43 @@ def _smoothstep(e0, e1, x):
     return t * t * (3.0 - 2.0 * t)
 
 
+def _coast_ramp(t, ease):
+    """0->1 ramp across the shore band with a constant-slope middle.
+
+    ``ease`` (0..0.45) is how much of each end is spent easing in and out.
+    The middle then runs at exactly the average slope, so the waterline —
+    which lands near the middle of the band — crosses a steady beach ramp
+    instead of smoothstep's steepest point, which sits on the shoreline.
+    C2 at both joins, so the flat plain and the flat seabed stay tangent.
+    """
+    t = np.clip(t, 0.0, 1.0)
+    k = float(np.clip(ease, 0.02, 0.45))
+    x = t / k
+    low = k * (x * x * x - 0.5 * x * x * x * x)
+    mid = 0.5 * k + (t - k)
+    xr = (1.0 - t) / k
+    high = (1.0 - k) - k * (xr * xr * xr - 0.5 * xr * xr * xr * xr)
+    s = np.where(t < k, low, np.where(t > 1.0 - k, high, mid))
+    return s / (1.0 - k)
+
+
+def _coast_t_at(level, ease):
+    """Fraction along the shore band where the profile reaches ``level``.
+
+    Used to pin the band around the island's shoreline (see WATERLINE):
+    the band can then be lengthened or shortened without moving where the
+    land meets the water.
+    """
+    lo, hi = 0.0, 1.0
+    for _ in range(24):
+        mid = 0.5 * (lo + hi)
+        if float(_coast_ramp(mid, ease)) < level:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
 def _norm_ppf(p):
     """Inverse standard-normal CDF (Acklam's rational approximation)."""
     p = float(np.clip(p, 1e-9, 1.0 - 1e-9))
@@ -229,6 +316,36 @@ def default_island_angle(base_seed, index):
     return float(rng.random()) * 2.0 * np.pi
 
 
+def island_shape_coeffs(isl_seed, variety):
+    """Seed-derived Fourier coefficients for an island's footprint radius.
+
+    Returns a tuple of ``(harmonic, amplitude, phase)`` terms. ``variety``
+    in [0, 1] scales every amplitude, so 0 gives an exact circle and 1
+    gives strongly lobed, organic coastlines. Higher harmonics add crenels
+    to the outline; lower ones make bays and peninsulas.
+
+    The island's own seed also picks its *character*: how lobed the outline
+    is overall, and how fast the harmonics fall off with frequency. A high
+    decay leaves broad bays and peninsulas (low harmonics dominate); a low
+    decay keeps a fringed, crinkled rim. Two islands sitting on the same
+    slider value therefore read as different kinds of coast.
+    """
+    variety = float(np.clip(variety, 0.0, 1.0))
+    if variety <= 1e-6:
+        return ()
+    rng = np.random.default_rng(island_seed(isl_seed, 0x5348))
+    scale = 0.70 + 0.50 * rng.random()   # per-island lobedness
+    decay = 0.15 + 0.95 * rng.random()   # per-island spectral balance
+    coeffs = []
+    for n in SHAPE_HARMONICS:
+        # Higher harmonics get a little less amplitude so the outline stays
+        # readable instead of turning into a starburst.
+        amp = SHAPE_AMP * variety * scale * (0.45 + 0.55 * rng.random()) / (n ** decay)
+        phase = rng.random() * 2.0 * np.pi
+        coeffs.append((n, float(amp), float(phase)))
+    return tuple(coeffs)
+
+
 def compose_islands(
     width,
     height,
@@ -242,6 +359,8 @@ def compose_islands(
     coast_warp=0.35,
     sea_level=0.06,
     edge_margin=0.04,
+    shape_variety=DEFAULT_SHAPE_VARIETY,
+    coast_slope=DEFAULT_COAST_SLOPE,
     chunk_rows=512,
 ):
     """Compose islands into a float32 heightmap in [0, 1].
@@ -286,11 +405,12 @@ def compose_islands(
 
         # Coast warp: low-frequency noise (~1 feature per radius) pushing
         # the radial distance in and out, sampled in the local frame, plus
-        # two fine bands so the shoreline carries detail at every scale.
+        # four fine bands so the shoreline carries detail at every scale.
         warp_freq = 1.2 / r_px
         fine_freq = COAST_FINE_FREQ / r_px
         fine2_freq = COAST_FINE2_FREQ / r_px
         fine3_freq = COAST_FINE3_FREQ / r_px
+        fine4_freq = COAST_FINE4_FREQ / r_px
         warp_seed = island_seed(isl_seed, 0x51EA + i)
         fine_seed = island_seed(isl_seed, 0x434F + i)
         terr_seed = island_seed(isl_seed, 0x7E42 + i)
@@ -302,16 +422,37 @@ def compose_islands(
         ridge_seed = island_seed(isl_seed, 0x5247 + i)
         spine_seed = island_seed(isl_seed, 0x5350 + i)
         clu_seed = island_seed(isl_seed, 0x434C + i)
+        # Seed-derived footprint: the radius is modulated by a Fourier
+        # series so every island has its own lobed, non-circular outline.
+        # Each island may carry its own shape_variety; the function-level
+        # value is only the fallback for islands that omit it.
+        isl_variety = isl.get("shape_variety")
+        if isl_variety is None:
+            isl_variety = shape_variety
+        shape_coeffs = island_shape_coeffs(isl_seed, isl_variety)
+        # Per-island shoreline: 0 keeps the band short (sharp drop at the
+        # waterline), 1 stretches it wide (long gentle slope into the sea).
+        isl_coast = float(np.clip(_float(isl.get("coast_slope"), coast_slope), 0.0, 1.0))
+        band_lo = SHARP_SHORE_MIN + (SHORE_MIN - SHARP_SHORE_MIN) * isl_coast
+        band_hi = SHARP_SHORE_MAX + (SHORE_MAX - SHARP_SHORE_MAX) * isl_coast
+        coast_ease = SHORE_EASE_MIN + (SHORE_EASE_MAX - SHORE_EASE_MIN) * isl_coast
         # Fine coast detail: mostly independent of the coarse slider, but
         # still fades to nearly nothing at "Coast roughness 0".
         fine_w = 0.25 + 0.75 * warp_amp
         fine_amp = COAST_FINE * fine_w
         fine2_amp = COAST_FINE2 * fine_w
         fine3_amp = COAST_FINE3 * fine_w
+        fine4_amp = COAST_FINE4 * fine_w
 
 
         # Plain + mountain parameters for this island (clamped).
         land_h, peak_h, cover, msize = island_elevation(isl)
+        # Where the nominal shore profile (plain falling to the sunk
+        # seabed) crosses height 0, as a fraction of the band. The band is
+        # laid out around that point, so a longer band lengthens the ramp
+        # in both directions while the shoreline stays at WATERLINE.
+        sink_i = max(SINK_MIN, SINK_RATIO * land_h)
+        coast_t0 = _coast_t_at(land_h / (land_h + sink_i), coast_ease)
         rough = a  # detail_amp: how much the lowland rolls
         # The mountain mask is thresholded at this island's own distribution:
         # a sample of the warped noise over the footprint fixes the value
@@ -407,7 +548,9 @@ def compose_islands(
             if c_hi - c_lo < 1e-6:
                 c_hi = c_lo + 1e-6
 
-        reach = r_px * (1.0 + warp_amp + fine_amp + fine2_amp + fine3_amp + 0.06) + 4.0
+        reach = r_px * ((WATERLINE + (1.0 - coast_t0) * band_hi + warp_amp
+                         + fine_amp + fine2_amp + fine3_amp + fine4_amp)
+                        * SHAPE_MAX) + 4.0
         bx0 = max(0, int(fcx) - int(np.ceil(reach)))
         bx1 = min(width, int(fcx) + int(np.ceil(reach)) + 1)
         by0 = max(0, int(fcy) - int(np.ceil(reach)))
@@ -438,11 +581,29 @@ def compose_islands(
                         persistence, lacunarity) * fine2_amp
             warp += fbm(lx * fine3_freq, ly * fine3_freq, fine_seed + 67, 2,
                         persistence, lacunarity) * fine3_amp
-            # elliptical island: rim at local (+-r*aspect, 0) / (0, +-r/aspect)
+            warp += fbm(lx * fine4_freq, ly * fine4_freq, fine_seed + 101, 2,
+                        persistence, lacunarity) * fine4_amp
+            # Seed-derived footprint: evaluate the Fourier radius at this
+            # pixel's local angle. The series has mean 1, so the island's
+            # overall size stays put; dividing the radial distance by it
+            # carves bays where the profile is small and pushes peninsulas
+            # out where it is large.
+            if shape_coeffs:
+                local_angle = np.arctan2(ly, lx)
+                shape_factor = np.ones_like(local_angle)
+                for n, amp, phase in shape_coeffs:
+                    shape_factor = shape_factor + amp * np.cos(n * local_angle + phase)
+                # The series has mean 1, so footprint area stays comparable
+                # across varieties; clamp the lobes so a high variety can
+                # bulge a little past the radius but never run away.
+                shape_factor = np.clip(shape_factor, SHAPE_MIN, SHAPE_MAX)
+            else:
+                shape_factor = 1.0
+            # Elliptical base: aspect > 1 widens along local x, narrows
+            # along local y. The shape factor then bends the rim.
             ex = lx / (r_px * asp)
             ey = (ly * asp) / r_px
-            d = np.sqrt(ex * ex + ey * ey) + warp
-
+            d = np.sqrt(ex * ex + ey * ey) / shape_factor + warp
             # ---- plain: near-flat lowland with gentle rolling relief and
             # a slight fall toward the coast (detail_amp scales both, so
             # detail 0 gives an exactly flat plain)
@@ -456,7 +617,6 @@ def compose_islands(
                 plain = land_h * (1.0 + rough * (roll - fall))
             else:
                 plain = land_h
-
             # ---- mountains: a warped, elongated mask picks out ranges;
             # ridged noise builds crests over a wide foothill apron
             if want_mtn:
@@ -507,14 +667,26 @@ def compose_islands(
             if want_mtn:
                 plain = np.minimum(plain, 1.0 - peak_h)
 
-            # ---- coast: shore width varies around the island; the land
-            # holds its height, crosses sea level, then eases into a shelf
+            # ---- coast: a continuous slope from the full-height interior
+            # down through sea level to the seabed. One eased ramp blends
+            # land height into the sunk sea floor, so the profile is
+            # monotonic, runs at a constant slope past the waterline, and
+            # has no cliff. This island's coast_slope sets how long that
+            # ramp is: a short band = sharp drop, a wide band = gentle
+            # slope, laid out around a fixed shoreline so the island keeps
+            # its size. The sink depth is proportional to this island's
+            # plain, which puts the waterline at a fixed fraction of the
+            # band for every island.
             sn = fbm01(lx * shore_freq, ly * shore_freq, shore_seed, 3, persistence, lacunarity)
-            shore_w = SHORE_MIN + (SHORE_MAX - SHORE_MIN) * sn
-            coast_t = np.clip((d - (1.0 - shore_w)) / shore_w, 0.0, 1.0)
-            land_in = 1.0 - _smoothstep(0.0, COAST_LAND_EDGE, coast_t)
-            shelf = _smoothstep(COAST_LAND_EDGE - 0.07, 1.0, coast_t)
-            h = (plain + peak) * land_in - SINK * shelf
+            shore_w = band_lo + (band_hi - band_lo) * sn
+            # Lay the band out around the pinned shoreline: widening it
+            # lengthens the ramp inland and out to sea without moving the
+            # point where the land meets the water.
+            band_in = WATERLINE - coast_t0 * shore_w
+            coast_t = np.clip((d - band_in) / shore_w, 0.0, 1.0)
+            s = _coast_ramp(coast_t, coast_ease)
+            sink = max(SINK_MIN, SINK_RATIO * land_h)
+            h = (plain + peak) * (1.0 - s) - sink * s
 
             region = out[y0:y1, bx0:bx1]
             np.maximum(region, h.astype(np.float32), out=region)

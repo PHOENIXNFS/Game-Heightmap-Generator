@@ -122,7 +122,8 @@ def export(
         "raw16": "application/octet-stream",
         "exr": "image/x-exr",
     }[format]
-    name = f"hmg_{job.heights.shape[1]}x{job.heights.shape[0]}.{format}"
+    ext = {"png16": ".png", "raw16": ".raw", "exr": ".exr"}[format]
+    name = f"hmg_{job.heights.shape[1]}x{job.heights.shape[0]}{ext}"
     return Response(
         content=data,
         media_type=media,

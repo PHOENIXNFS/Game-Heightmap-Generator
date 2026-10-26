@@ -161,6 +161,14 @@
     };
   }
 
+  /* Shape-variety default derived from the island's own seed, so a new
+     or legacy island starts with its own footprint character instead of
+     sharing one value with every other island. */
+  function shapeVarietyFor(seed) {
+    var r = mulberry32(seed >>> 0);
+    return Math.round((0.30 + 0.55 * r()) * 100) / 100;
+  }
+
   function ensureIslandFields() {
     var islands = state.config.islands;
     for (var i = 0; i < islands.length; i++) {
@@ -173,6 +181,18 @@
       ["land_height", "mountain_height", "mountain_coverage", "mountain_size"].forEach(function (k) {
         if (typeof isl[k] !== "number" || !isFinite(isl[k])) isl[k] = def[k];
       });
+      // Each island owns its shape variety; an island without one gets a
+      // value derived from its own seed, so no two start alike.
+      if (typeof isl.shape_variety !== "number" || !isFinite(isl.shape_variety)) {
+        isl.shape_variety = shapeVarietyFor(isl.seed);
+      }
+      isl.shape_variety = Math.min(1, Math.max(0, isl.shape_variety));
+      // Each island owns its shoreline too: 0 = sharp drop at the
+      // waterline, 1 = long gentle slope. Legacy configs predate it.
+      if (typeof isl.coast_slope !== "number" || !isFinite(isl.coast_slope)) {
+        isl.coast_slope = 0.5;
+      }
+      isl.coast_slope = Math.min(1, Math.max(0, isl.coast_slope));
     }
   }
 
@@ -301,6 +321,14 @@
     var sizeRow = sliderRow("Size", "isl-r", 0.02, 0.9, 0.005, isl.radius, Number(isl.radius).toFixed(3));
     var aspVal = isl.aspect == null ? 1 : isl.aspect;
     var aspRow = sliderRow("Aspect", "isl-as", 0.3, 3, 0.01, aspVal, Number(aspVal).toFixed(2));
+    var shapeVal = isl.shape_variety == null ? 0.55 : isl.shape_variety;
+    var shapeRow = sliderRow("Shape", "isl-shape", 0, 1, 0.01, shapeVal,
+      Number(shapeVal).toFixed(2),
+      "Footprint variety for this island only: 0 = circle, higher = seed-driven bays, peninsulas and lobes");
+    var coastVal = isl.coast_slope == null ? 0.5 : isl.coast_slope;
+    var coastRow = sliderRow("Coast", "isl-coast", 0, 1, 0.01, coastVal,
+      Number(coastVal).toFixed(2),
+      "Shoreline for this island only: 0 = sharp drop at the waterline, 1 = long gentle slope into the sea");
     var rotRow = sliderRow("Rotation", "isl-a", 0, 360, 1, deg(isl.angle || 0), String(deg(isl.angle || 0)));
 
     var sub = document.createElement("div");
@@ -324,6 +352,8 @@
     card.appendChild(seedRow);
     card.appendChild(sizeRow.row);
     card.appendChild(aspRow.row);
+    card.appendChild(shapeRow.row);
+    card.appendChild(coastRow.row);
     card.appendChild(rotRow.row);
     card.appendChild(sub);
     card.appendChild(landRow.row);
@@ -373,6 +403,17 @@
       Preview2D.constrain(state.config.islands[i]);
       syncCard(i);
       Preview2D.setConfig(state.config);
+      changed();
+    });
+    shapeRow.input.addEventListener("input", function () {
+      state.config.islands[i].shape_variety = Number(shapeRow.input.value);
+      shapeRow.output.textContent = Number(shapeRow.input.value).toFixed(2);
+      Preview2D.setConfig(state.config);
+      changed();
+    });
+    coastRow.input.addEventListener("input", function () {
+      state.config.islands[i].coast_slope = Number(coastRow.input.value);
+      coastRow.output.textContent = Number(coastRow.input.value).toFixed(2);
       changed();
     });
     rotRow.input.addEventListener("input", function () {
@@ -477,6 +518,18 @@
       aspEl.value = String(av);
       aspEl.nextElementSibling.textContent = Number(av).toFixed(2);
     }
+    var shEl = card.getElementsByClassName("isl-shape")[0];
+    if (shEl && document.activeElement !== shEl) {
+      var sv = isl.shape_variety == null ? 0.55 : isl.shape_variety;
+      shEl.value = String(sv);
+      shEl.nextElementSibling.textContent = Number(sv).toFixed(2);
+    }
+    var coEl = card.getElementsByClassName("isl-coast")[0];
+    if (coEl && document.activeElement !== coEl) {
+      var cov2 = isl.coast_slope == null ? 0.5 : isl.coast_slope;
+      coEl.value = String(cov2);
+      coEl.nextElementSibling.textContent = Number(cov2).toFixed(2);
+    }
     var a = card.getElementsByClassName("isl-a")[0];
     var d = deg(isl.angle || 0);
     a.value = String(d);
@@ -519,6 +572,8 @@
       mountain_height: elev.mountain_height,
       mountain_coverage: elev.mountain_coverage,
       mountain_size: elev.mountain_size,
+      shape_variety: shapeVarietyFor(seed),
+      coast_slope: 0.5,
       enabled: true
     };
   }
@@ -727,7 +782,8 @@
       .then(function (b) {
         var a = document.createElement("a");
         a.href = URL.createObjectURL(b);
-        var name = "hmg_" + state.config.width + "x" + state.config.height + "." + fmt;
+        var ext = {"png16": ".png", "raw16": ".raw", "exr": ".exr"}[fmt];
+    var name = "hmg_" + state.config.width + "x" + state.config.height + ext;
         a.download = name;
         document.body.appendChild(a);
         a.click();
@@ -767,6 +823,7 @@
             base.seed = cfg.seed != null ? cfg.seed : base.seed;
             base.sea_level = cfg.sea_level != null ? cfg.sea_level : base.sea_level;
             base.mode = cfg.mode || base.mode;
+            base.shape_variety = cfg.shape_variety != null ? cfg.shape_variety : base.shape_variety;
             if (cfg.noise) {
               for (var k in cfg.noise) {
                 if (Object.prototype.hasOwnProperty.call(cfg.noise, k)) base.noise[k] = cfg.noise[k];

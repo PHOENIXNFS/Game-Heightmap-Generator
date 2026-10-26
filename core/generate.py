@@ -10,6 +10,7 @@ import numpy as np
 
 from .compose import (
     COVER_RANGE,
+    DEFAULT_COAST_SLOPE,
     LAND_RANGE,
     PEAK_RANGE,
     SIZE_RANGE,
@@ -31,6 +32,7 @@ DEFAULT_CONFIG = {
     "seed": 1337,
     "sea_level": 0.06,
     "mode": "islands",
+    "shape_variety": 0.55,
     "noise": {
         "scale": 2.5,
         "octaves": 6,
@@ -55,6 +57,10 @@ DEFAULT_CONFIG = {
             "mountain_height": 0.15,
             "mountain_coverage": 0.20,
             "mountain_size": 1.0,
+            "shape_variety": 0.55,
+            # Shoreline profile: 0 = sharp drop at the waterline,
+            # 1 = long gentle slope into the sea (per island).
+            "coast_slope": DEFAULT_COAST_SLOPE,  # from core.compose
             "enabled": True,
         }
     ],
@@ -127,6 +133,7 @@ def normalize_config(cfg):
     seed = _num(cfg.get("seed"), base["seed"], 0, 2**31 - 1, int)
     sea = _num(cfg.get("sea_level"), base["sea_level"], 0.0, 1.0)
     mode = "landscape" if str(cfg.get("mode", "")).lower() == "landscape" else "islands"
+    shape_variety = _num(cfg.get("shape_variety"), base["shape_variety"], 0.0, 1.0)
     if mode == "landscape":
         # An inland tile has no sea: zero the water line so nothing downstream
         # (export flattening, stats, previews) can treat low ground as ocean.
@@ -169,6 +176,8 @@ def normalize_config(cfg):
         peak_h = min(peak_h, max(0.0, 1.0 - land_h))  # land + peaks <= 1
         cover = _num(item.get("mountain_coverage"), COVER_DEFAULT, *COVER_RANGE)
         msize = _num(item.get("mountain_size"), SIZE_DEFAULT, *SIZE_RANGE)
+        isl_variety = _num(item.get("shape_variety"), shape_variety, 0.0, 1.0)
+        coast = _num(item.get("coast_slope"), DEFAULT_COAST_SLOPE, 0.0, 1.0)
         islands.append(
             {
                 "cx": _num(item.get("cx"), 0.5, -0.5, 1.5),
@@ -181,6 +190,8 @@ def normalize_config(cfg):
                 "mountain_height": peak_h,
                 "mountain_coverage": cover,
                 "mountain_size": msize,
+                "shape_variety": isl_variety,
+                "coast_slope": coast,
                 "enabled": bool(item.get("enabled", True)),
             }
         )
@@ -231,6 +242,7 @@ def normalize_config(cfg):
         "seed": seed,
         "sea_level": sea,
         "mode": mode,
+        "shape_variety": shape_variety,
         "noise": noise,
         "islands": islands,
         "landscape": landscape,
@@ -295,6 +307,7 @@ def run_pipeline(cfg, progress=None):
             coast_warp=cfg["noise"]["coast_warp"],
             sea_level=cfg["sea_level"],
             edge_margin=cfg["noise"]["edge_margin"],
+            shape_variety=cfg["shape_variety"],
         )
     report(0.55, "composing done")
 
