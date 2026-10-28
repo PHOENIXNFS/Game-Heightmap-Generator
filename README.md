@@ -579,3 +579,11 @@ lowland and mountain distribution, and the three export formats.
 ## 11. License
 
 MIT — see [LICENSE](LICENSE).
+
+## 12. UI Images
+<br><br>
+<img width="1858" height="923" alt="image" src="https://github.com/user-attachments/assets/b24a90eb-751a-43fc-bd0f-533ea3e27b6a" />
+<br><br>
+<img width="1859" height="922" alt="image" src="https://github.com/user-attachments/assets/28c34f3d-f8aa-4a9e-a120-6d9a2f82a425" />
+
+
