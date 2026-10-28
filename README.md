@@ -42,7 +42,14 @@ network calls.
 ## 2. Requirements and installation
 
 - **Python 3.10+** (uses `X | None` type syntax)
-- Python packages: `numpy`, `fastapi`, `uvicorn`, `pillow`, `OpenEXR`
+- Dependencies are listed in [`requirements.txt`](requirements.txt):
+  `numpy`, `fastapi`, `uvicorn`, `pillow`, `OpenEXR`
+
+```bash
+pip install -r requirements.txt
+```
+
+Or install the packages directly:
 
 ```bash
 pip install numpy fastapi uvicorn pillow OpenEXR
@@ -490,6 +497,7 @@ full `0..1` range (this is what the UI uses, so previews and exports agree).
 ```
 server.py          FastAPI app: JSON API + static file serving
 server.bat         Windows launcher
+requirements.txt   runtime dependencies (pip install -r requirements.txt)
 core/generate.py   config normalization, job registry, pipeline orchestration
 core/compose.py    island and landscape heightmap composition
 core/noise.py      value noise, fbm, ridged noise, island seed hashing
