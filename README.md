@@ -58,21 +58,37 @@ pip install numpy fastapi uvicorn pillow OpenEXR
 ## 3. Running the application
 
 ```bash
-python server.py
+python start.py
 ```
 
-The server binds `127.0.0.1:8765`. Open **http://127.0.0.1:8765** in a
-browser. On Windows, `server.bat` runs the same command and pauses so the
-console stays open.
+On Windows, `server.bat` runs the same launcher and pauses so the console
+stays open.
 
-The port is hard-coded at the bottom of [server.py](server.py):
+**start.py** is the environment bootstrap and port chooser:
 
-```python
-uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
+1. Creates a local virtual environment in `terrain-venv/` on first run and installs
+   [`requirements.txt`](requirements.txt) into it (it re-installs only when
+   that file changes). The venv uses `--system-site-packages`, so packages
+   you already have satisfy the requirements without a download.
+2. Starts `server.py` **inside that environment**.
+3. Picks the port:
+   - `HMG_PORT` if you set it explicitly — that port is used as-is;
+   - otherwise **8765 when it is free** (the default);
+   - otherwise a **random free port**, so a second launch never disturbs an
+     already-running session.
+4. Prints the URL once `GET /api/health` answers, e.g.
+   `Terrain Heightmap Generator — http://127.0.0.1:8765`
+
+```bash
+HMG_PORT=9000 python start.py   # force a specific port
 ```
 
-Interactive OpenAPI docs are served at **http://127.0.0.1:8765/api/docs**.
-A health check is available at `GET /api/health` → `{"ok": true}`.
+`python server.py` still starts the server directly on 8765 (or `HMG_PORT`)
+in the current interpreter — that path is what the test suite uses.
+
+Interactive OpenAPI docs are served at the same origin under **/api/docs**
+(default `http://127.0.0.1:8765/api/docs`). A health check is available at
+`GET /api/health` → `{"ok": true}`.
 
 ---
 
@@ -523,9 +539,11 @@ full `0..1` range (this is what the UI uses, so previews and exports agree).
 
 ```
 defaults.json      central default values for the whole tool (single source of truth)
+start.py           environment bootstrap + port selection launcher
 server.py          FastAPI app: JSON API + static file serving
-server.bat         Windows launcher
+server.bat         Windows launcher (runs start.py)
 requirements.txt   runtime dependencies (pip install -r requirements.txt)
+terrain-venv/      virtual environment created by start.py (not in git)
 core/generate.py   config normalization, job registry, pipeline orchestration
 core/compose.py    island and landscape heightmap composition
 core/noise.py      value noise, fbm, ridged noise, island seed hashing

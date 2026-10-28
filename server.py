@@ -1,8 +1,12 @@
 """Local web server for the terrain heightmap generator.
 
 Run with:  python server.py   (then open http://127.0.0.1:8765)
+
+Port is 8765 unless HMG_PORT overrides it — start.py sets HMG_PORT when the
+default port is already busy.
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -193,4 +197,5 @@ app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
+    port = int(os.environ.get("HMG_PORT", "8765"))
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

@@ -1,0 +1,8 @@
+# environment created by start.py
+terrain-venv/
+
+# runtime logs
+*.log
+
+# bytecode
+__pycache__/
