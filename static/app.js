@@ -65,7 +65,8 @@
 
   function readUI() {
     var cfg = state.config;
-    cfg.seed = clampInt($("seed").value, 0, 2147483647, 1337);
+    cfg.seed = clampInt($("seed").value, 0, 2147483647,
+      TOOL_DEFAULTS && TOOL_DEFAULTS.seed != null ? TOOL_DEFAULTS.seed : 0);
     cfg.mode = $("mode").value;
     var fr = readFullRes();
     cfg.width = fr.w;
@@ -139,34 +140,26 @@
     return (Math.imul(base >>> 0, 73856093) ^ Math.imul(index, 19349663)) >>> 0;
   }
 
-  /* Deterministic PRNG: island elevation defaults follow the island seed. */
-  function mulberry32(a) {
-    return function () {
-      a = (a + 0x6D2B79F5) | 0;
-      var t = Math.imul(a ^ (a >>> 15), 1 | a);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
+  /* The tool's default values live in ONE place: defaults.json at the
+     project root. The backend loads it into DEFAULT_CONFIG, serves it
+     through /api/defaults, and init() caches the response here — nothing
+     in this file may hardcode a default of its own. */
+  var TOOL_DEFAULTS = null;
+
+  /* Central island template (defaults.json's first island), or null. */
+  function centralIsland() {
+    return (TOOL_DEFAULTS && TOOL_DEFAULTS.islands && TOOL_DEFAULTS.islands[0]) || null;
   }
 
-  /* Elevation defaults for an island that has none (new or legacy): flat
-     land + varied mountains, all derived from the island seed. */
-  function elevationFor(seed) {
-    var r = mulberry32(seed >>> 0);
-    return {
-      land_height: Math.round((0.10 + 0.06 * r()) * 1000) / 1000,
-      mountain_height: Math.round((0.15 + 0.30 * r()) * 100) / 100,
-      mountain_coverage: Math.round((0.06 + 0.30 * r()) * 100) / 100,
-      mountain_size: Math.round((0.7 + 0.9 * r()) * 100) / 100
-    };
+  /* A single field of that template — used wherever a value is missing
+     and must be filled with the tool's default rather than a local copy. */
+  function defaultOf(key) {
+    var isl = centralIsland();
+    return isl ? isl[key] : undefined;
   }
 
-  /* Shape-variety default derived from the island's own seed, so a new
-     or legacy island starts with its own footprint character instead of
-     sharing one value with every other island. */
-  function shapeVarietyFor(seed) {
-    var r = mulberry32(seed >>> 0);
-    return Math.round((0.30 + 0.55 * r()) * 100) / 100;
+  function centralLandscape() {
+    return (TOOL_DEFAULTS && TOOL_DEFAULTS.landscape) || {};
   }
 
   function ensureIslandFields() {
@@ -177,39 +170,43 @@
         isl.seed = islandSeed(state.config.seed, i); // pre-seed configs stay reproducible
       }
       isl.seed = isl.seed >>> 0;
-      var def = elevationFor(isl.seed);
-      ["land_height", "mountain_height", "mountain_coverage", "mountain_size"].forEach(function (k) {
-        if (typeof isl[k] !== "number" || !isFinite(isl[k])) isl[k] = def[k];
+      // The split seeds are materialized once so the card shows the real
+      // values; until one is rerolled it stays equal to the island seed.
+      if (typeof isl.shape_seed !== "number" || !isFinite(isl.shape_seed)) {
+        isl.shape_seed = isl.seed;
+      }
+      isl.shape_seed = isl.shape_seed >>> 0;
+      if (typeof isl.terrain_seed !== "number" || !isFinite(isl.terrain_seed)) {
+        isl.terrain_seed = isl.seed;
+      }
+      isl.terrain_seed = isl.terrain_seed >>> 0;
+      // Missing values come from the central defaults — only the seeds
+      // above are ever random. Legacy configs predate these fields.
+      ["land_height", "mountain_height", "mountain_coverage", "mountain_size",
+       "shape_variety", "coast_slope"].forEach(function (k) {
+        if (typeof isl[k] !== "number" || !isFinite(isl[k])) {
+          var v = defaultOf(k);
+          if (typeof v === "number") isl[k] = v;
+        }
       });
-      // Each island owns its shape variety; an island without one gets a
-      // value derived from its own seed, so no two start alike.
-      if (typeof isl.shape_variety !== "number" || !isFinite(isl.shape_variety)) {
-        isl.shape_variety = shapeVarietyFor(isl.seed);
+      if (typeof isl.shape_variety === "number") {
+        isl.shape_variety = Math.min(1, Math.max(0, isl.shape_variety));
       }
-      isl.shape_variety = Math.min(1, Math.max(0, isl.shape_variety));
-      // Each island owns its shoreline too: 0 = sharp drop at the
-      // waterline, 1 = long gentle slope. Legacy configs predate it.
-      if (typeof isl.coast_slope !== "number" || !isFinite(isl.coast_slope)) {
-        isl.coast_slope = 0.5;
+      if (typeof isl.coast_slope === "number") {
+        isl.coast_slope = Math.min(1, Math.max(0, isl.coast_slope));
       }
-      isl.coast_slope = Math.min(1, Math.max(0, isl.coast_slope));
     }
   }
 
   /* Landscape elevation model. Legacy saved configs predate the block, so
-     fill it in rather than letting readUI write into undefined. */
-  var LANDSCAPE_DEFAULTS = {
-    land_height: 0.10,
-    mountain_height: 0.30,
-    mountain_coverage: 0.18,
-    mountain_size: 1.0
-  };
-
+     fill it in from the central defaults rather than letting readUI write
+     into undefined. */
   function ensureLandscapeFields() {
     var l = state.config.landscape;
     if (!l || typeof l !== "object") l = state.config.landscape = {};
-    Object.keys(LANDSCAPE_DEFAULTS).forEach(function (k) {
-      if (typeof l[k] !== "number" || !isFinite(l[k])) l[k] = LANDSCAPE_DEFAULTS[k];
+    var d = centralLandscape();
+    Object.keys(d).forEach(function (k) {
+      if (typeof l[k] !== "number" || !isFinite(l[k])) l[k] = d[k];
     });
     return l;
   }
@@ -297,35 +294,45 @@
     pos.appendChild(posInput("X", "isl-x", isl.cx));
     pos.appendChild(posInput("Y", "isl-y", isl.cy));
 
-    var seedRow = document.createElement("div");
-    seedRow.className = "island-seed";
-    var seedLabel = document.createElement("label");
-    seedLabel.textContent = "Seed ";
-    seedLabel.title = "Random seed for this island only — rerolling it leaves the other islands untouched";
-    var seedInp = document.createElement("input");
-    seedInp.type = "number";
-    seedInp.className = "isl-seed";
-    seedInp.min = "0";
-    seedInp.max = "4294967295";
-    seedInp.step = "1";
-    seedInp.value = String(isl.seed >>> 0);
-    seedLabel.appendChild(seedInp);
-    var reroll = document.createElement("button");
-    reroll.type = "button";
-    reroll.className = "small isl-reroll";
-    reroll.textContent = "\u21bb";
-    reroll.title = "reroll this island's seed";
-    seedRow.appendChild(seedLabel);
-    seedRow.appendChild(reroll);
+    /* Two seed rows per island: the outline (footprint + rotation) and the
+       surface (plain, mountains, shore band) can be rerolled one at a time,
+       so you can keep a coastline you like and reshuffle the terrain. */
+    function seedRowEl(labelText, cls, value, title) {
+      var row = document.createElement("div");
+      row.className = "island-seed";
+      var lab = document.createElement("label");
+      lab.textContent = labelText + " ";
+      lab.title = title;
+      var inp = document.createElement("input");
+      inp.type = "number";
+      inp.className = cls;
+      inp.min = "0";
+      inp.max = "4294967295";
+      inp.step = "1";
+      inp.value = String(value >>> 0);
+      lab.appendChild(inp);
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "small " + cls + "-reroll";
+      btn.textContent = "\u21bb";
+      btn.title = "reroll " + labelText.toLowerCase() + " only";
+      row.appendChild(lab);
+      row.appendChild(btn);
+      return { row: row, input: inp, reroll: btn };
+    }
+    var shapeSeedRow = seedRowEl("Shape seed", "isl-shape-seed", isl.shape_seed,
+      "Outline seed — footprint lobes, bays, peninsulas and rotation. Lock it to keep the coast while the terrain changes");
+    var terrSeedRow = seedRowEl("Terrain seed", "isl-terrain-seed", isl.terrain_seed,
+      "Surface seed — plain relief, mountains and the shore band. Reroll it to reshape the land under the same outline");
 
     var sizeRow = sliderRow("Size", "isl-r", 0.02, 0.9, 0.005, isl.radius, Number(isl.radius).toFixed(3));
-    var aspVal = isl.aspect == null ? 1 : isl.aspect;
+    var aspVal = isl.aspect == null ? defaultOf("aspect") : isl.aspect;
     var aspRow = sliderRow("Aspect", "isl-as", 0.3, 3, 0.01, aspVal, Number(aspVal).toFixed(2));
-    var shapeVal = isl.shape_variety == null ? 0.55 : isl.shape_variety;
+    var shapeVal = isl.shape_variety == null ? defaultOf("shape_variety") : isl.shape_variety;
     var shapeRow = sliderRow("Shape", "isl-shape", 0, 1, 0.01, shapeVal,
       Number(shapeVal).toFixed(2),
       "Footprint variety for this island only: 0 = circle, higher = seed-driven bays, peninsulas and lobes");
-    var coastVal = isl.coast_slope == null ? 0.5 : isl.coast_slope;
+    var coastVal = isl.coast_slope == null ? defaultOf("coast_slope") : isl.coast_slope;
     var coastRow = sliderRow("Coast", "isl-coast", 0, 1, 0.01, coastVal,
       Number(coastVal).toFixed(2),
       "Shoreline for this island only: 0 = sharp drop at the waterline, 1 = long gentle slope into the sea");
@@ -349,7 +356,8 @@
 
     card.appendChild(head);
     card.appendChild(pos);
-    card.appendChild(seedRow);
+    card.appendChild(shapeSeedRow.row);
+    card.appendChild(terrSeedRow.row);
     card.appendChild(sizeRow.row);
     card.appendChild(aspRow.row);
     card.appendChild(shapeRow.row);
@@ -424,18 +432,23 @@
       Preview2D.setConfig(state.config);
       changed();
     });
-    seedInp.addEventListener("change", function () {
-      var v = clampInt(seedInp.value, 0, 4294967295, state.config.islands[i].seed >>> 0);
-      state.config.islands[i].seed = v;
-      seedInp.value = String(v);
-      changed();
-    });
-    reroll.addEventListener("click", function () {
-      state.config.islands[i].seed = randomSeed();
-      seedInp.value = String(state.config.islands[i].seed);
-      changed();
-      schedulePreview(true);
-    });
+    function bindSeed(row, key) {
+      row.input.addEventListener("change", function () {
+        var v = clampInt(row.input.value, 0, 4294967295,
+          state.config.islands[i][key] >>> 0);
+        state.config.islands[i][key] = v;
+        row.input.value = String(v);
+        changed();
+      });
+      row.reroll.addEventListener("click", function () {
+        state.config.islands[i][key] = randomSeed();
+        row.input.value = String(state.config.islands[i][key]);
+        changed();
+        schedulePreview(true);
+      });
+    }
+    bindSeed(shapeSeedRow, "shape_seed");
+    bindSeed(terrSeedRow, "terrain_seed");
     function bindElevation(row, key, digits) {
       row.input.addEventListener("input", function () {
         var v = Number(row.input.value);
@@ -514,13 +527,13 @@
     r.nextElementSibling.textContent = Number(isl.radius).toFixed(3);
     var aspEl = card.getElementsByClassName("isl-as")[0];
     if (aspEl) {
-      var av = isl.aspect == null ? 1 : isl.aspect;
+      var av = isl.aspect == null ? defaultOf("aspect") : isl.aspect;
       aspEl.value = String(av);
       aspEl.nextElementSibling.textContent = Number(av).toFixed(2);
     }
     var shEl = card.getElementsByClassName("isl-shape")[0];
     if (shEl && document.activeElement !== shEl) {
-      var sv = isl.shape_variety == null ? 0.55 : isl.shape_variety;
+      var sv = isl.shape_variety == null ? defaultOf("shape_variety") : isl.shape_variety;
       shEl.value = String(sv);
       shEl.nextElementSibling.textContent = Number(sv).toFixed(2);
     }
@@ -534,8 +547,14 @@
     var d = deg(isl.angle || 0);
     a.value = String(d);
     a.nextElementSibling.textContent = String(d);
-    var sd = card.getElementsByClassName("isl-seed")[0];
-    if (sd && document.activeElement !== sd) sd.value = String(isl.seed >>> 0);
+    var ssd = card.getElementsByClassName("isl-shape-seed")[0];
+    if (ssd && document.activeElement !== ssd) {
+      ssd.value = String((isl.shape_seed != null ? isl.shape_seed : isl.seed) >>> 0);
+    }
+    var tsd = card.getElementsByClassName("isl-terrain-seed")[0];
+    if (tsd && document.activeElement !== tsd) {
+      tsd.value = String((isl.terrain_seed != null ? isl.terrain_seed : isl.seed) >>> 0);
+    }
     var ld = card.getElementsByClassName("isl-land")[0];
     if (ld && document.activeElement !== ld) {
       ld.value = String(isl.land_height);
@@ -558,24 +577,21 @@
     }
   }
 
+  /* A freshly added island copies the central default island (defaults.json
+     via /api/defaults) and only draws new seeds — every slider starts at
+     the tool's default, never at a random value. */
   function defaultIsland(cx, cy) {
     var seed = randomSeed();
-    var elev = elevationFor(seed);
-    return {
-      cx: cx,
-      cy: cy,
-      radius: 0.18,
-      aspect: 1.0,
-      angle: 0,
-      seed: seed,
-      land_height: elev.land_height,
-      mountain_height: elev.mountain_height,
-      mountain_coverage: elev.mountain_coverage,
-      mountain_size: elev.mountain_size,
-      shape_variety: shapeVarietyFor(seed),
-      coast_slope: 0.5,
-      enabled: true
-    };
+    var isl = centralIsland()
+      ? JSON.parse(JSON.stringify(centralIsland()))
+      : {};
+    isl.cx = cx;
+    isl.cy = cy;
+    isl.seed = seed;
+    isl.shape_seed = seed;
+    isl.terrain_seed = seed;
+    isl.enabled = true;
+    return isl;
   }
 
   /* ================= preview / generate ================= */
@@ -959,7 +975,11 @@
     });
     $("island-reroll").addEventListener("click", function () {
       var islands = state.config.islands;
-      for (var k = 0; k < islands.length; k++) islands[k].seed = randomSeed();
+      for (var k = 0; k < islands.length; k++) {
+        islands[k].seed = randomSeed();
+        islands[k].shape_seed = randomSeed();
+        islands[k].terrain_seed = randomSeed();
+      }
       renderIslandCards();
       changed();
       schedulePreview(true);
@@ -1017,6 +1037,7 @@
     fetch("/api/defaults")
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        TOOL_DEFAULTS = JSON.parse(JSON.stringify(d.config)); // pristine cache of defaults.json
         applyToUI(d.config);
         bind();
         markExports();

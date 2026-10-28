@@ -394,9 +394,25 @@ def compose_islands(
             if isl_seed is not None
             else island_seed(seed, i)
         )
+        # Outline vs surface sub-seeds (see normalize_config): shape_seed
+        # draws the footprint and rotation, terrain_seed draws the plain,
+        # mountains and shore band. A missing key falls back to the island
+        # seed, which keeps configs that predate the split byte-identical.
+        shape_seed = isl.get("shape_seed")
+        shape_seed = (
+            int(shape_seed) & 0xFFFFFFFF
+            if shape_seed is not None
+            else isl_seed
+        )
+        terrain_seed = isl.get("terrain_seed")
+        terrain_seed = (
+            int(terrain_seed) & 0xFFFFFFFF
+            if terrain_seed is not None
+            else isl_seed
+        )
         angle = isl.get("angle")
         if angle is None:
-            angle = default_island_angle(isl_seed, i)
+            angle = default_island_angle(shape_seed, i)
         angle = float(angle)
         ca = np.float32(np.cos(angle))
         sa = np.float32(np.sin(angle))
@@ -411,17 +427,22 @@ def compose_islands(
         fine2_freq = COAST_FINE2_FREQ / r_px
         fine3_freq = COAST_FINE3_FREQ / r_px
         fine4_freq = COAST_FINE4_FREQ / r_px
-        warp_seed = island_seed(isl_seed, 0x51EA + i)
-        fine_seed = island_seed(isl_seed, 0x434F + i)
-        terr_seed = island_seed(isl_seed, 0x7E42 + i)
-        plain_seed = island_seed(isl_seed, 0x504C + i)
-        swell_seed = island_seed(isl_seed, 0x5357 + i)
-        shore_seed = island_seed(isl_seed, 0x5348 + i)
-        mtn_seed = island_seed(isl_seed, 0x4D4F + i)
-        mwarp_seed = island_seed(isl_seed, 0x4D57 + i)
-        ridge_seed = island_seed(isl_seed, 0x5247 + i)
-        spine_seed = island_seed(isl_seed, 0x5350 + i)
-        clu_seed = island_seed(isl_seed, 0x434C + i)
+        # Coast warp, fine crenulation and the shore band's width noise all
+        # decide where the waterline falls, so they belong to the outline:
+        # shape_seed keeps the coast locked while terrain is rerolled.
+        warp_seed = island_seed(shape_seed, 0x51EA + i)
+        fine_seed = island_seed(shape_seed, 0x434F + i)
+        shore_seed = island_seed(shape_seed, 0x5348 + i)
+        # Plain relief and mountains belong to the surface: rerolling
+        # terrain_seed reshapes them and leaves the outline where it was.
+        terr_seed = island_seed(terrain_seed, 0x7E42 + i)
+        plain_seed = island_seed(terrain_seed, 0x504C + i)
+        swell_seed = island_seed(terrain_seed, 0x5357 + i)
+        mtn_seed = island_seed(terrain_seed, 0x4D4F + i)
+        mwarp_seed = island_seed(terrain_seed, 0x4D57 + i)
+        ridge_seed = island_seed(terrain_seed, 0x5247 + i)
+        spine_seed = island_seed(terrain_seed, 0x5350 + i)
+        clu_seed = island_seed(terrain_seed, 0x434C + i)
         # Seed-derived footprint: the radius is modulated by a Fourier
         # series so every island has its own lobed, non-circular outline.
         # Each island may carry its own shape_variety; the function-level
@@ -429,7 +450,7 @@ def compose_islands(
         isl_variety = isl.get("shape_variety")
         if isl_variety is None:
             isl_variety = shape_variety
-        shape_coeffs = island_shape_coeffs(isl_seed, isl_variety)
+        shape_coeffs = island_shape_coeffs(shape_seed, isl_variety)
         # Per-island shoreline: 0 keeps the band short (sharp drop at the
         # waterline), 1 stretches it wide (long gentle slope into the sea).
         isl_coast = float(np.clip(_float(isl.get("coast_slope"), coast_slope), 0.0, 1.0))

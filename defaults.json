@@ -1,0 +1,61 @@
+{
+  "width": 1024,
+  "height": 1024,
+  "seed": 1337,
+  "sea_level": 0.06,
+  "mode": "islands",
+  "shape_variety": 0.55,
+  "noise": {
+    "scale": 2.5,
+    "octaves": 6,
+    "persistence": 0.5,
+    "lacunarity": 2.0,
+    "detail_amp": 0.4,
+    "coast_warp": 0.15,
+    "edge_margin": 0.04
+  },
+  "islands": [
+    {
+      "cx": 0.5,
+      "cy": 0.5,
+      "radius": 0.3,
+      "aspect": 1.0,
+      "angle": null,
+      "seed": null,
+      "shape_seed": null,
+      "terrain_seed": null,
+      "land_height": 0.085,
+      "mountain_height": 0.15,
+      "mountain_coverage": 0.2,
+      "mountain_size": 1.0,
+      "shape_variety": 0.55,
+      "coast_slope": 0.5,
+      "enabled": true
+    }
+  ],
+  "landscape": {
+    "land_height": 0.1,
+    "mountain_height": 0.3,
+    "mountain_coverage": 0.18,
+    "mountain_size": 1.0
+  },
+  "erosion": {
+    "enabled": true,
+    "droplets": 60000,
+    "max_steps": 30,
+    "inertia": 0.05,
+    "capacity_factor": 4.0,
+    "min_capacity": 0.01,
+    "max_capacity": 0.1,
+    "max_sediment": 0.1,
+    "erode_speed": 0.3,
+    "deposit_speed": 0.3,
+    "evaporate": 0.02,
+    "gravity": 4.0,
+    "brush_radius": 2
+  },
+  "smoothing": {
+    "thermal": 0.5,
+    "blur": 0.5
+  }
+}

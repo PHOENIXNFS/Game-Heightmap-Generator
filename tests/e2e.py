@@ -85,6 +85,19 @@ def main():
           isinstance(isl0.get("shape_variety"), (int, float)))
     check("defaults island has its own coast slope",
           isinstance(isl0.get("coast_slope"), (int, float)))
+    # The central defaults file must be exactly what the server serves:
+    # defaults.json is the single source of truth for the whole tool.
+    central = json.loads(
+        (Path(__file__).resolve().parent.parent / "defaults.json").read_text(encoding="utf-8"))
+    served = defaults["config"]
+    scalars_ok = all(served.get(k) == v for k, v in central.items()
+                     if not isinstance(v, (dict, list)))
+    blocks_ok = all(served.get(k) == v for k, v in central.items() if isinstance(v, dict))
+    island_ok = all(served["islands"][0].get(k) == v
+                    for k, v in central["islands"][0].items() if v is not None)
+    check("defaults.json drives /api/defaults",
+          scalars_ok and blocks_ok and island_ok,
+          f"scalars {scalars_ok} blocks {blocks_ok} island {island_ok}")
     check("defaults has no elevation field", "elevation" not in isl0)
     dc = defaults["config"]
     check("defaults smoothing block", isinstance(dc.get("smoothing"), dict)
@@ -339,6 +352,60 @@ def main():
           float(np.abs(va[box_b] - vb[box_b]).max()) == 0.0)
     check("shape variety changes its own island",
           float(np.abs(va[box_a] - vb[box_a]).max()) > 1e-4)
+
+    print("== shape / terrain seeds ==")
+    st, _, appjs = req("/app.js")
+    check("island card has separate shape + terrain seed controls",
+          st == 200 and b"isl-shape-seed" in appjs and b"isl-terrain-seed" in appjs)
+    st, _, raw = req("/api/defaults")
+    d0 = json.loads(raw)["config"]["islands"][0]
+    check("defaults expose shape + terrain seeds",
+          isinstance(d0.get("shape_seed"), int) and isinstance(d0.get("terrain_seed"), int)
+          and d0["shape_seed"] >= 0 and d0["terrain_seed"] >= 0)
+
+    # An island that omits the split seeds must render exactly like one
+    # carrying seed/seed explicitly — that is every pre-split config's path.
+    no_ripple = {**CONFIG["noise"], "detail_amp": 0.0}
+    flat_isl = dict(ISLANDS[0], seed=4242, mountain_height=0.0, mountain_coverage=0.0)
+    a = preview_arr(dict(CONFIG, noise=no_ripple, islands=[flat_isl],
+                         smoothing=no_post, erosion=no_ero))
+    b = preview_arr(dict(CONFIG, noise=no_ripple,
+                         islands=[dict(flat_isl, shape_seed=4242, terrain_seed=4242)],
+                         smoothing=no_post, erosion=no_ero))
+    check("split seeds fall back to the island seed", bool(np.array_equal(a, b)))
+
+    # Lock: with no mountains and no relief the coast is drawn entirely from
+    # the shape seed, so rerolling terrain must not move a single pixel.
+    at = preview_arr(dict(CONFIG, noise=no_ripple,
+                          islands=[dict(flat_isl, terrain_seed=998877)],
+                          smoothing=no_post, erosion=no_ero))
+    check("terrain reroll keeps a flat island's coast bit-identical",
+          bool(np.array_equal(a, at)))
+    as_ = preview_arr(dict(CONFIG, noise=no_ripple,
+                           islands=[dict(flat_isl, shape_seed=998877)],
+                           smoothing=no_post, erosion=no_ero))
+    check("shape reroll changes the outline",
+          float(np.abs(a - as_).max()) > 1e-4)
+
+    # On a real island the terrain seed must actually drive the surface...
+    r0 = preview_arr(dict(CONFIG, islands=[ISLANDS[0]],
+                          smoothing=no_post, erosion=no_ero))
+    r1 = preview_arr(dict(CONFIG, islands=[dict(ISLANDS[0], terrain_seed=1234)],
+                          smoothing=no_post, erosion=no_ero))
+    r2 = preview_arr(dict(CONFIG, islands=[dict(ISLANDS[0], terrain_seed=7777)],
+                          smoothing=no_post, erosion=no_ero))
+    check("terrain reroll reshapes a mountainous island",
+          float(np.abs(r1 - r2).max()) > 1e-4)
+    # ...while the outline it sits on stays put: a terrain-only reroll must
+    # disturb far less of the waterline than a shape-only one.
+    rs = preview_arr(dict(CONFIG, islands=[dict(ISLANDS[0], shape_seed=4321)],
+                          smoothing=no_post, erosion=no_ero))
+    land0, landt, lands = (r0 > sea), (r1 > sea), (rs > sea)
+    xor_terr = float(np.logical_xor(land0, landt).mean())
+    xor_shape = float(np.logical_xor(land0, lands).mean())
+    check("shape reroll moves the waterline far more than terrain reroll",
+          xor_shape > 2.0 * xor_terr,
+          f"shape {xor_shape:.5f} vs terrain {xor_terr:.5f}")
 
     print("== flat land + sparse mountains ==")
 

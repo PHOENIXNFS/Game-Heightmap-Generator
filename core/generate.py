@@ -1,10 +1,12 @@
 """Generation pipeline orchestration and the in-memory job registry."""
 
 import copy
+import json
 import threading
 import time
 import traceback
 import uuid
+from pathlib import Path
 
 import numpy as np
 
@@ -26,73 +28,17 @@ from .smoothing import thermal_erosion, smooth_blur
 MIN_DIM = 64
 MAX_DIM = 8192
 
-DEFAULT_CONFIG = {
-    "width": 1024,
-    "height": 1024,
-    "seed": 1337,
-    "sea_level": 0.06,
-    "mode": "islands",
-    "shape_variety": 0.55,
-    "noise": {
-        "scale": 2.5,
-        "octaves": 6,
-        "persistence": 0.5,
-        "lacunarity": 2.0,
-        "detail_amp": 0.4,
-        "coast_warp": 0.15,
-        "edge_margin": 0.04,
-    },
-    "islands": [
-        {
-            "cx": 0.5,
-            "cy": 0.5,
-            "radius": 0.3,
-            "aspect": 1.0,
-            "angle": None,
-            "seed": None,  # None = derive a distinct seed from the global seed
-            # Elevation model: a flat plain at land_height with ranges of
-            # mountains above it; coverage 0 = flat atoll, 1 = all mountains,
-            # mountain_size scales how broad a single massif is.
-            "land_height": 0.085,
-            "mountain_height": 0.15,
-            "mountain_coverage": 0.20,
-            "mountain_size": 1.0,
-            "shape_variety": 0.55,
-            # Shoreline profile: 0 = sharp drop at the waterline,
-            # 1 = long gentle slope into the sea (per island).
-            "coast_slope": DEFAULT_COAST_SLOPE,  # from core.compose
-            "enabled": True,
-        }
-    ],
-    # Landscape-mode elevation model (no sea, no coast): a near-flat plain
-    # with ranges of mountains rising out of it. Same four knobs as an
-    # island, but they apply to the whole map.
-    "landscape": {
-        "land_height": 0.10,
-        "mountain_height": 0.30,
-        "mountain_coverage": 0.18,
-        "mountain_size": 1.0,
-    },
-    "erosion": {
-        "enabled": True,
-        "droplets": 60000,
-        "max_steps": 30,
-        "inertia": 0.05,
-        "capacity_factor": 4.0,
-        "min_capacity": 0.01,
-        "max_capacity": 0.10,
-        "max_sediment": 0.10,
-        "erode_speed": 0.3,
-        "deposit_speed": 0.3,
-        "evaporate": 0.02,
-        "gravity": 4.0,
-        "brush_radius": 2,
-    },
-    "smoothing": {
-        "thermal": 0.5,
-        "blur": 0.5,
-    },
-}
+# The single source of truth for every default value in the tool. It is a
+# plain JSON file at the project root so the backend (loaded here), the API
+# (/api/defaults) and the web UI (which consumes /api/defaults) all read the
+# same numbers — edit defaults.json, never a copy of it.
+#   * angle / seed / shape_seed / terrain_seed = null  ->  derived per
+#     island by normalize_config() from the configured seed.
+#   * coast_slope / shape_variety / land_*  ->  the defaults a new island
+#     and the UI start from (see core.compose for what they mean).
+DEFAULTS_PATH = Path(__file__).resolve().parent.parent / "defaults.json"
+with DEFAULTS_PATH.open("r", encoding="utf-8") as _fh:
+    DEFAULT_CONFIG = json.load(_fh)
 
 # Per-island elevation defaults (kept in sync with core.compose).
 LAND_DEFAULT = DEFAULT_CONFIG["islands"][0]["land_height"]
@@ -165,8 +111,21 @@ def normalize_config(cfg):
             isl_seed = island_seed(seed, i)
         else:
             isl_seed = _num(isl_seed, island_seed(seed, i), 0, 2**32 - 1, int) & 0xFFFFFFFF
+        # Split seeds: the outline and the surface can be rerolled one at a
+        # time. Both fall back to the island seed when unset, so a config
+        # saved before the split is byte-for-byte unchanged.
+        shape_seed = item.get("shape_seed")
+        if shape_seed is None:
+            shape_seed = isl_seed
+        else:
+            shape_seed = _num(shape_seed, isl_seed, 0, 2**32 - 1, int) & 0xFFFFFFFF
+        terrain_seed = item.get("terrain_seed")
+        if terrain_seed is None:
+            terrain_seed = isl_seed
+        else:
+            terrain_seed = _num(terrain_seed, isl_seed, 0, 2**32 - 1, int) & 0xFFFFFFFF
         angle = item.get("angle")
-        base_angle = default_island_angle(isl_seed, i)
+        base_angle = default_island_angle(shape_seed, i)
         if angle is None:
             angle = base_angle
         else:
@@ -186,6 +145,8 @@ def normalize_config(cfg):
                 "aspect": _num(item.get("aspect"), 1.0, 0.3, 3.0),
                 "angle": angle,
                 "seed": int(isl_seed),
+                "shape_seed": int(shape_seed),
+                "terrain_seed": int(terrain_seed),
                 "land_height": land_h,
                 "mountain_height": peak_h,
                 "mountain_coverage": cover,
@@ -198,6 +159,8 @@ def normalize_config(cfg):
     if not islands:
         islands = copy.deepcopy(base["islands"])
         islands[0]["seed"] = island_seed(seed, 0)
+        islands[0]["shape_seed"] = islands[0]["seed"]
+        islands[0]["terrain_seed"] = islands[0]["seed"]
         islands[0]["angle"] = default_island_angle(islands[0]["seed"], 0)
 
     e_in = cfg.get("erosion")
@@ -259,7 +222,16 @@ def islands_seed(islands):
     """
     acc = 0x811C9DC5
     for i, isl in enumerate(islands):
-        acc = island_seed(acc ^ int(isl.get("seed", 0)), i + 1)
+        val = int(isl.get("seed", 0)) & 0xFFFFFFFF
+        # Erosion follows the *terrain* seed: rerolling terrain re-rolls
+        # the droplets that carved it, while a shape-only reroll leaves
+        # them alone. While terrain_seed still equals the island seed (the
+        # pre-split case) nothing extra is mixed in, so existing configs
+        # keep exactly the droplets they had.
+        terr = isl.get("terrain_seed")
+        if terr is not None and (int(terr) & 0xFFFFFFFF) != val:
+            val ^= int(terr) & 0xFFFFFFFF
+        acc = island_seed(acc ^ val, i + 1)
     return int(acc) & 0xFFFFFFFF
 
 

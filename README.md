@@ -114,14 +114,19 @@ a card to select it; the selected island is highlighted in the 2D preview.
 | **Mountain height** | 0.00 – 0.60 | How far ranges rise above the plain (clamped so `land + peak ≤ 1`). |
 | **Mountain coverage** | 0.00 – 1.00 | Share of the island that is high ground: `0` = flat atoll, `1` = mountains everywhere. |
 | **Mountain size** | 0.60 – 2.00 | Breadth of a single massif: scattered hills → one large range. |
-| **Seed** / ↻ | 0 … 2³²−1 | The island's private seed. Rerolling reshapes only that island. |
+| **Shape seed** | 0 … 2³²−1 | Drives the outline: footprint harmonics, coast warp, shore band and default rotation. Lock it to keep a coastline you like. |
+| **Terrain seed** | 0 … 2³²−1 | Drives the surface: plain relief and mountains (plus the erosion droplets). Reroll it to reshape the land under the same outline. |
 
-**+ add** appends an island; **↻ seeds** rerolls every island's seed.
+Both default to the island's own seed, so a config saved before the split
+renders exactly as it did before. A newly added island copies the tool's
+default island from `defaults.json` — every slider starts at its default and
+only the seeds are drawn at random. **+ add** appends an island; **↻ seeds**
+rerolls every island's seed (both of them).
 
-Island seeds also determine each island's *character* — its overall lobedness
-and how fast its coastline harmonics decay — so two islands at the same
-**Shape** value still read as different kinds of coast (broad bays vs. a
-fringed rim).
+The shape seed also decides each island's *character* — its overall
+lobedness and how fast its coastline harmonics decay — so two islands at the
+same **Shape** value still read as different kinds of coast (broad bays vs.
+a fringed rim).
 
 ### 4.4 TERRAIN NOISE panel
 
@@ -198,6 +203,13 @@ map's own 99th-percentile slope), so they always agree.
 
 ## 5. Configuration reference
 
+Every default value for the tool lives in one file:
+[`defaults.json`](defaults.json) at the project root. `core/generate.py`
+loads it into `DEFAULT_CONFIG`, `GET /api/defaults` serves it, and the web UI
+caches that response — so the backend, the API and the interface can never
+drift apart. Edit `defaults.json` to change a default; nothing else holds a
+copy of it.
+
 The configuration is a single JSON object. `POST /api/preview` and
 `POST /api/generate` accept it as `{"config": {...}}`. Every key is optional:
 missing, malformed or out-of-range values are replaced or clamped by
@@ -233,7 +245,9 @@ missing, malformed or out-of-range values are replaced or clamped by
 | `radius` | float | 0.01 – 1.5 | 0.3 | Nominal radius as a fraction of the map's smaller dimension. |
 | `aspect` | float | 0.3 – 3.0 | 1.0 | Ellipse aspect ratio. |
 | `angle` | float | ±4π | seed-derived | Rotation in radians. `null` = derived from the island seed. |
-| `seed` | int | 0 – 2³²−1 | derived | `null` = derived from the global seed via `island_seed(seed, index)`. |
+| `seed` | int | 0 – 2³²−1 | derived | `null` = derived from the global seed via `island_seed(seed, index)`. Legacy single seed; both sub-seeds fall back to it. |
+| `shape_seed` | int | 0 – 2³²−1 | `seed` | Outline seed: footprint harmonics, coast warp, shore-band width, default rotation. `null` = follow `seed`. |
+| `terrain_seed` | int | 0 – 2³²−1 | `seed` | Surface seed: plain relief, mountains, and the erosion droplet pattern. `null` = follow `seed`. |
 | `land_height` | float | 0.02 – 0.60 | 0.085 | Absolute plain elevation. |
 | `mountain_height` | float | 0 – 0.60 | 0.15 | Clamped to `1 − land_height`. |
 | `mountain_coverage` | float | 0 – 1 | 0.20 | Share of the island that is high ground. |
@@ -288,7 +302,8 @@ there is no coast, so `coast_slope` and `noise.coast_warp` have no effect.
   "sea_level": 0.06,
   "islands": [
     { "cx": 0.35, "cy": 0.40, "radius": 0.28, "coast_slope": 1.0, "shape_variety": 0.8 },
-    { "cx": 0.70, "cy": 0.62, "radius": 0.20, "coast_slope": 0.0 }
+    { "cx": 0.70, "cy": 0.62, "radius": 0.20, "coast_slope": 0.0,
+      "seed": 777, "shape_seed": 777, "terrain_seed": 4211 }
   ],
   "erosion": { "enabled": true, "droplets": 120000, "max_steps": 40 }
 }
@@ -463,17 +478,29 @@ no coast and no sea, so the terrain runs off the map edges.
 ### 7.4 Determinism and seeding
 
 All pseudo-randomness derives from `island_seed(base_seed, index)`, a 32-bit
-integer hash used as a NumPy `Generator` seed. Island rotation, footprint
-coefficients, per-island noise and mountain masks are drawn from
-sub-seeds of the island's own seed, so:
+integer hash used as a NumPy `Generator` seed. Each island carries two
+sub-seeds on top of its own:
+
+- **`shape_seed`** — footprint harmonics, coast warp, fine crenulation, the
+  shore band and the default rotation, i.e. everything that fixes the
+  coastline.
+- **`terrain_seed`** — plain relief, the mountain mask/crest stack and the
+  erosion pass, i.e. everything that fills the island in.
+
+Both fall back to the island's `seed` when unset, so:
 
 - rerolling one island changes only that island;
+- rerolling **Terrain seed** reshapes the land while the outline stays put
+  (on an island with no relief and no mountains, the output is
+  bit-identical);
+- rerolling **Shape seed** redraws the coast while the terrain underneath
+  keeps its character;
 - the same configuration at the same size always produces a byte-identical
-  heightmap;
-- every size is deterministic in itself. The post passes (droplet count,
-  talus, blur radius) scale with the map's smaller dimension, so a 512
-  preview and a 4096 export of the same config are designed to *look* alike,
-  not to be pixel-identical.
+  heightmap.
+
+The post passes (droplet count, talus, blur radius) scale with the map's
+smaller dimension, so a 512 preview and a 4096 export of the same config are
+designed to *look* alike, not to be pixel-identical.
 
 ---
 
@@ -495,6 +522,7 @@ full `0..1` range (this is what the UI uses, so previews and exports agree).
 ## 9. Project structure
 
 ```
+defaults.json      central default values for the whole tool (single source of truth)
 server.py          FastAPI app: JSON API + static file serving
 server.bat         Windows launcher
 requirements.txt   runtime dependencies (pip install -r requirements.txt)
