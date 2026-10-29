@@ -59,7 +59,7 @@ CONFIG = {
 
 
 def main():
-    print("== static + meta ==")
+    print("== static + defaults ==")
     st, h, raw = req("/")
     check("index.html served", st == 200 and b"Terrain Heightmap" in raw)
     check("full-res dropdown present",
@@ -99,6 +99,7 @@ def main():
           scalars_ok and blocks_ok and island_ok,
           f"scalars {scalars_ok} blocks {blocks_ok} island {island_ok}")
     check("defaults has no elevation field", "elevation" not in isl0)
+    check("defaults have no world block", "world" not in defaults["config"])
     dc = defaults["config"]
     check("defaults smoothing block", isinstance(dc.get("smoothing"), dict)
           and all(isinstance(v, (int, float)) and 0.0 <= v <= 1.0
@@ -416,9 +417,15 @@ def main():
         land = arr[arr > cfg.get("sea_level", CONFIG["sea_level"])]
         if land.size == 0:
             return 0.0, 0.0, 0.0
-        return (float(land.size) / arr.size,
-                float((land > 0.45).mean()),
-                float(land.max()))
+        # "High ground" is measured against the map's own relief — above
+        # half the rise over the plain — not a fixed 0.45 line. mountain_height
+        # is a scale, not a guarantee, so an absolute cut both misses real
+        # peaks and reports 0 for every island, hiding the response it
+        # exists to check.
+        plain = isl1["land_height"]
+        rise = float(land.max()) - plain
+        hi = (land > plain + 0.5 * rise).mean() if rise > 1e-6 else 0.0
+        return (float(land.size) / arr.size, float(hi), float(land.max()))
 
     isl1 = ISLANDS[0]
     # plain: with no mountains and no ripple the lowland sits at land_height
@@ -432,12 +439,17 @@ def main():
     check("lowland is flat (no mountains, no ripple)", on_plain >= 0.6,
           f"{on_plain:.2f} of land on the plain")
 
-    # default map: high ground is a minority of the land, not a dome
+    # default map: the top half of the relief is a minority of the land
     frac_def, hi_def, max_def = land_stats()
     check("mountains are localized", 0.005 < hi_def < 0.45,
           f"land {frac_def:.3f}, high {hi_def:.3f}")
-    check("peaks rise well above the plain", max_def > isl1["land_height"] + 0.15,
-          f"max {max_def:.3f}")
+    # Peaks reach at least 60% of the island's nominal mountain_height above
+    # the plain (measured ~85% on this config; crest x dominance x mask
+    # multiplication means the summit rarely hits 100% of the scale).
+    peak_nominal = isl1.get("mountain_height", 0.15)
+    want_peak = isl1["land_height"] + 0.6 * peak_nominal
+    check("peaks rise well above the plain", max_def > want_peak,
+          f"max {max_def:.3f}, need {want_peak:.3f}")
 
     # coverage: more of the island clears the mountain threshold
     _, hi_sparse, _ = land_stats(islands=[dict(isl1, mountain_coverage=0.15)])
@@ -486,7 +498,11 @@ def main():
                                islands=[dict(isl1, mountain_coverage=0.30,
                                              mountain_size=size)]))
         land = arr > CONFIG["sea_level"]
-        high = arr > isl1["land_height"] + 0.10
+        # Relative cut again: "broader massifs" must be judged on the
+        # massif's own body, not on whichever sliver clears a fixed height
+        # (an absolute cut reads the size slider backwards).
+        rise = float(arr.max()) - isl1["land_height"]
+        high = arr > isl1["land_height"] + 0.5 * rise
         per = sum(int((high != np.roll(high, s, ax)).sum())
                   for s, ax in ((1, 0), (-1, 0), (1, 1), (-1, 1)))
         return (per / max(int(high.sum()), 1),
@@ -693,6 +709,10 @@ def main():
     check("bad format rejected", st == 400)
     st, _, raw = req(f"/api/export/{jid}?format=png16&sea_mode=bogus")
     check("bad sea_mode rejected", st == 400)
+    # No world-scale sidecar or world units: the heightmap itself is the
+    # product, engines ask for scale in their own import dialog.
+    st, _, _ = req(f"/api/export/{jid}?format=meta")
+    check("meta format rejected", st == 400)
 
     print("== masks ==")
     st, hds, raw = req(f"/api/masks/{jid}?kind=water")

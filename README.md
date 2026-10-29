@@ -382,7 +382,7 @@ job endpoint means the id was never created or has been evicted.
 | `format` | `png16` \| `raw16` \| `exr` | `png16` | Output encoding. Unknown values → `400`. |
 | `sea_mode` | `keep` \| `flatten` \| `remap` | `keep` | Treatment of pixels below sea level: keep them, zero them, or rescale land to the full `0..1` range. |
 | `sea` | 0 – 1 | job's `sea_level` | Overrides the sea level used for the cut. |
-| `scale` | float | `1.0` | Multiplier applied to heights (EXR only, where it is applied before encoding). |
+| `scale` | float | `1.0` | Multiplier applied to heights (EXR only). |
 
 Encodings:
 
@@ -390,7 +390,7 @@ Encodings:
 | --- | --- | --- | --- |
 | `png16` | `image/png` | `hmg_{W}x{H}.png` | 16-bit grayscale PNG. |
 | `raw16` | `application/octet-stream` | `hmg_{W}x{H}.raw` | Little-endian `uint16`, row-major, `W × H` pixels. |
-| `exr` | `image/x-exr` | `hmg_{W}x{H}.exr` | OpenEXR, single channel, half float. |
+| `exr` | `image/x-exr` | `hmg_{W}x{H}.exr` | OpenEXR, single channel; normalized `0..1` (or `scale` × it). |
 
 ### 6.4 `GET /api/masks/{id}`
 
@@ -532,6 +532,10 @@ designed to *look* alike, not to be pixel-identical.
 Choose `sea_mode` to match the consuming tool: `keep` preserves the seabed,
 `flatten` zeroes everything underwater, and `remap` stretches land to the
 full `0..1` range (this is what the UI uses, so previews and exports agree).
+
+The heightmap itself is the product: exports stay normalized (`0..1`), and
+scale is set once, in the destination tool's own import dialog — every engine
+has one, and plenty of walkthroughs cover them.
 
 ---
 
