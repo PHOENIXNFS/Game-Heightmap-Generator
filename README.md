@@ -90,6 +90,40 @@ Interactive OpenAPI docs are served at the same origin under **/api/docs**
 (default `http://127.0.0.1:8765/api/docs`). A health check is available at
 `GET /api/health` → `{"ok": true}`.
 
+### 3.1 Rendering from the command line
+
+The server is optional for scripted work: the same pipeline runs headless
+straight from the config to a file.
+
+```bash
+python -m core.generate config.json island.png
+python -m core.generate config.json island.exr --sea-mode remap
+python -m core.generate - out.raw < config.json     # config on stdin
+python -m core.generate out.png                     # no config: tool defaults
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `config` | Config JSON path, or `-` for stdin. Omitted → `defaults.json`. |
+| `output` | Destination file; its extension picks the format: `.png` → `png16`, `.raw`/`.r16` → `raw16`, `.exr` → `exr`. Parent directories are created. |
+| `--format` | Overrides the format implied by the extension. |
+| `--sea-mode` | `keep` (default) \| `flatten` \| `remap` — how pixels below sea level are encoded. |
+| `--sea` | Overrides the config's sea level (0–1). |
+| `--scale` | Multiplier applied to EXR values (default `1.0`). |
+| `-q`, `--quiet` | Suppresses progress. |
+
+Progress goes to **stderr** as `[ 66.5%] erosion` lines, so stdout stays a
+single machine-readable result line:
+
+```
+island.png  1024x1024  png16  258535 bytes  11737 ms  max 0.196  land 13.9%
+```
+
+Exit codes: `0` success, `1` unreadable config or write failure, `2` bad
+arguments (including an extension no format can be inferred from). Output is
+deterministic — the same config renders byte-identical files here and through
+`POST /api/generate`.
+
 ---
 
 ## 4. Using the interface
@@ -107,6 +141,7 @@ as you change any control.
 | **Generate Full Res** | Renders the heightmap at the size set in **Full res**. Required before exporting. |
 | **PNG16 / RAW r16 / EXR** | Export buttons; enabled only after a full-res render completes. |
 | **Save / Load** | Downloads the configuration as `heightmap-config.json`, or reads one back (it is merged over the defaults, so partial files work). |
+| **Undo / Redo** | Steps back one change and forward again — slider drags, moved/resized islands, added islands, seed rerolls, a loaded config. `Ctrl+Z` (`Cmd+Z` on macOS) undoes; `Ctrl+Shift+Z` or `Ctrl+Y` redoes; text fields keep their own native undo. Each stack holds 50 states, and making a new change discards the redo path, as editors do. |
 
 ### 4.2 MAP panel
 

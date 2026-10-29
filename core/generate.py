@@ -1,7 +1,9 @@
 """Generation pipeline orchestration and the in-memory job registry."""
 
+import argparse
 import copy
 import json
+import sys
 import threading
 import time
 import traceback
@@ -448,3 +450,94 @@ def run_job_blocking(store, cfg, kind="preview"):
         job.ms = int((time.time() - t0) * 1000)
         job.finished = time.time()
     return job
+
+
+# ---------------------------------------------------------------------------
+# Command line
+# ---------------------------------------------------------------------------
+
+# Output format implied by the output file's extension. --format overrides it.
+_EXT_FORMATS = {
+    ".png": "png16",
+    ".raw": "raw16",
+    ".r16": "raw16",
+    ".exr": "exr",
+}
+
+
+def main(argv=None):
+    """Render a config straight to a heightmap file, without the server.
+
+        python -m core.generate [config.json] out.png
+
+    ``config`` is optional (defaults to defaults.json, ``-`` reads stdin) and
+    the output format follows the file extension unless ``--format`` says
+    otherwise. Progress goes to stderr, so stdout stays one result line that a
+    shell script can consume.
+    """
+    from .export import FORMATS, SEA_MODES, export_heights
+
+    ap = argparse.ArgumentParser(
+        prog="python -m core.generate",
+        description="Render a heightmap config to a file (no server needed).",
+    )
+    ap.add_argument("config", nargs="?", default=None,
+                    help="config JSON path, or '-' for stdin (default: defaults.json)")
+    ap.add_argument("output",
+                    help="output file; its extension picks the format "
+                         "(.png, .raw/.r16, .exr)")
+    ap.add_argument("--format", choices=FORMATS, default=None,
+                    help="override the format implied by the output extension")
+    ap.add_argument("--sea-mode", choices=SEA_MODES, default="keep",
+                    help="how pixels below sea level are encoded (default: keep)")
+    ap.add_argument("--sea", type=float, default=None,
+                    help="override the config's sea level, 0..1")
+    ap.add_argument("--scale", type=float, default=1.0,
+                    help="multiplier applied to EXR values (default: 1.0)")
+    ap.add_argument("-q", "--quiet", action="store_true",
+                    help="do not print progress to stderr")
+    args = ap.parse_args(argv)
+
+    try:
+        if args.config is None:
+            cfg = copy.deepcopy(DEFAULT_CONFIG)
+        elif args.config == "-":
+            cfg = json.load(sys.stdin)
+        else:
+            with open(args.config, "r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"error: cannot read config: {exc}", file=sys.stderr)
+        return 1
+
+    fmt = args.format or _EXT_FORMATS.get(Path(args.output).suffix.lower())
+    if fmt is None:
+        ap.error(f"cannot infer a format from {args.output!r}; "
+                 f"pass --format {'|'.join(FORMATS)}")
+    if args.sea is not None:
+        cfg["sea_level"] = args.sea  # normalize_config() clamps it
+
+    def progress(frac, msg):
+        print(f"[{frac * 100:5.1f}%] {msg}", file=sys.stderr)
+
+    t0 = time.time()
+    try:
+        heights = run_pipeline(cfg, progress=None if args.quiet else progress)
+        cfg = normalize_config(cfg)  # run_pipeline normalized its own copy
+        data = export_heights(fmt, heights, cfg["sea_level"], args.sea_mode, args.scale)
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    stats = compute_stats(heights, cfg["sea_level"])
+    print(f"{out}  {heights.shape[1]}x{heights.shape[0]}  {fmt}  "
+          f"{len(data)} bytes  {int((time.time() - t0) * 1000)} ms  "
+          f"max {stats['max']:.3f}  land {stats['land_frac'] * 100:.1f}%")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

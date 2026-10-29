@@ -17,8 +17,14 @@
     selected: 0,
     heights: null,
     lastW: 0,
-    lastH: 0
+    lastH: 0,
+    undoStack: [],     // config snapshots, oldest first
+    redoStack: [],     // states left behind by undo, waiting to come back
+    undoLast: null,    // JSON of the last recorded state
+    undoSkipNext: false // ignore the snapshot produced by restoring a state
   };
+
+  var UNDO_MAX = 50;
 
   /* ================= config <-> UI ================= */
 
@@ -602,6 +608,64 @@
     schedulePreview();
   }
 
+  /* Undo works on whole configs. runPreview() is the one place where the
+     DOM has just been read back into state.config, so that is where a change
+     is recorded: one entry per rendered state, which coalesces a slider drag
+     (a burst of `input` events) into a single undo step instead of one per
+     pixel dragged. */
+  function snapshotForUndo() {
+    var snap = JSON.stringify(state.config);
+    if (state.undoSkipNext) {
+      state.undoSkipNext = false;
+      state.undoLast = snap; // canonical state after applying an undo
+      return;
+    }
+    if (state.undoLast === null) {
+      state.undoLast = snap;
+      return;
+    }
+    if (snap === state.undoLast) return;
+    state.undoStack.push(state.undoLast);
+    if (state.undoStack.length > UNDO_MAX) state.undoStack.shift();
+    state.redoStack.length = 0; // a new change invalidates the forward path
+    state.undoLast = snap;
+    updateHistoryUI();
+  }
+
+  /* Shared by undo and redo: restore a snapshot and re-render it. */
+  function restoreSnapshot(snap) {
+    state.undoSkipNext = true;
+    state.undoLast = snap;
+    applyToUI(JSON.parse(snap));
+    state.fullDirty = true; // the full-res render no longer matches
+    markExports();
+    schedulePreview(true);
+  }
+
+  function undo() {
+    if (!state.undoStack.length) return;
+    var prev = state.undoStack.pop();
+    state.redoStack.push(state.undoLast); // keep the state we are leaving
+    if (state.redoStack.length > UNDO_MAX) state.redoStack.shift();
+    restoreSnapshot(prev);
+    updateHistoryUI();
+  }
+
+  function redo() {
+    if (!state.redoStack.length) return;
+    var next = state.redoStack.pop();
+    state.undoStack.push(state.undoLast);
+    restoreSnapshot(next);
+    updateHistoryUI();
+  }
+
+  function updateHistoryUI() {
+    var u = $("undo");
+    var r = $("redo");
+    if (u) u.disabled = !state.undoStack.length;
+    if (r) r.disabled = !state.redoStack.length;
+  }
+
   /* Full res only affects the full generate, never the preview, so this
      does not schedule a preview (which would just re-render the same
      picture at the preview size). */
@@ -638,6 +702,7 @@
 
   function runPreview() {
     readUI();
+    snapshotForUndo();
     var seq = ++state.previewSeq;
     var size = parseInt($("preview-res").value, 10) || 512;
     var cfg = JSON.parse(JSON.stringify(state.config));
@@ -891,6 +956,24 @@
     $("mask-slope").addEventListener("click", function () { downloadMask("slope"); });
     bindSlider("mask-steepness", "mask-steepness-val", 2, function () {});
     $("save-cfg").addEventListener("click", saveConfig);
+    $("undo").addEventListener("click", undo);
+    $("redo").addEventListener("click", redo);
+    // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z and Ctrl+Y redo; text fields keep
+    // their own native undo so typing in a number box is not hijacked
+    // (range/checkbox inputs are covered).
+    document.addEventListener("keydown", function (e) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      var key = String(e.key || "").toLowerCase();
+      var isRedo = key === "y" || (key === "z" && e.shiftKey);
+      var isUndo = key === "z" && !e.shiftKey;
+      if (!isRedo && !isUndo) return;
+      var t = e.target;
+      if (t && t.tagName === "INPUT" &&
+          t.type !== "range" && t.type !== "checkbox" &&
+          t.type !== "radio") return;
+      e.preventDefault();
+      if (isRedo) redo(); else undo();
+    });
     $("load-cfg").addEventListener("click", function () { $("load-cfg-file").click(); });
     $("load-cfg-file").addEventListener("change", function () {
       if (this.files && this.files[0]) loadConfig(this.files[0]);
