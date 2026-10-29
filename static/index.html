@@ -8,7 +8,7 @@
 </head>
 <body>
 <header id="topbar">
-  <span id="app-title" title="Terrain Heightmap Generator — make terrain heightmaps (PNG16 / RAW r16 / EXR)">Terrain Heightmap Generator</span>
+  <span id="app-title" title="Terrain Heightmap Generator — make terrain heightmaps (PNG16 / RAW16 / EXR)">Terrain Heightmap Generator</span>
   <span id="global-seed-field" class="hdr-field">
     <label class="hdr-field">Seed <input type="number" id="seed" value="1337" min="0" step="1" title="Global seed for landscape terrain and its erosion — hidden in islands mode, where every island has its own seed"></label>
     <button id="seed-random" title="Pick a new random seed">&#x21bb;</button>
@@ -23,13 +23,13 @@
   <button id="generate-full" class="primary" title="Render the full-size heightmap (can take seconds to minutes at 2k/4k)">Generate Full Res</button>
   <div class="spacer"></div>
   <button id="export-png16" disabled title="Export 16-bit PNG heightmap">PNG16</button>
-  <button id="export-raw16" disabled title="Export RAW r16 (little-endian uint16, width×height pixels)">RAW r16</button>
+  <button id="export-raw16" disabled title="Export RAW16 (little-endian uint16, width×height pixels)">RAW16</button>
   <button id="export-exr" disabled title="Export OpenEXR half-float single channel (normalized 0..1)">EXR</button>
   <button id="save-cfg" title="Save current config to a JSON file">Save</button>
   <button id="load-cfg" title="Load config from a JSON file">Load</button>
   <input type="file" id="load-cfg-file" accept=".json" hidden>
-  <button id="undo" disabled title="Undo the last change (Ctrl+Z)">Undo</button>
-  <button id="redo" disabled title="Redo the last undo (Ctrl+Shift+Z or Ctrl+Y)">Redo</button>
+  <button id="undo" disabled title="Undo the last change (Ctrl+Z)" aria-label="Undo">↶</button>
+  <button id="redo" disabled title="Redo the last undo (Ctrl+Shift+Z or Ctrl+Y)" aria-label="Redo">↷</button>
 </header>
 
 <main id="layout">

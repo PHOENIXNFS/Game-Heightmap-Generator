@@ -1,4 +1,4 @@
-"""Heightmap export: PNG16, RAW r16 (little-endian), float EXR."""
+"""Heightmap export: PNG16, RAW16 (little-endian), float EXR."""
 
 import io
 

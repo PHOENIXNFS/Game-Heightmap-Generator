@@ -139,7 +139,7 @@ as you change any control.
 | **Seed** / ↻ | Global seed (0 – 2³¹−1) with a random-roll button. Shown in *Landscape* mode only; in *Islands* mode every island carries its own seed instead. |
 | **Preview res** | Preview canvas size: 256 / 512 / 1024 px. |
 | **Generate Full Res** | Renders the heightmap at the size set in **Full res**. Required before exporting. |
-| **PNG16 / RAW r16 / EXR** | Export buttons; enabled only after a full-res render completes. |
+| **PNG16 / RAW16 / EXR** | Export buttons; enabled only after a full-res render completes. |
 | **Save / Load** | Downloads the configuration as `heightmap-config.json`, or reads one back (it is merged over the defaults, so partial files work). |
 | **Undo / Redo** | Steps back one change and forward again — slider drags, moved/resized islands, added islands, seed rerolls, a loaded config. `Ctrl+Z` (`Cmd+Z` on macOS) undoes; `Ctrl+Shift+Z` or `Ctrl+Y` redoes; text fields keep their own native undo. Each stack holds 50 states, and making a new change discards the redo path, as editors do. |
 
@@ -246,7 +246,7 @@ map's own 99th-percentile slope), so they always agree.
    the previews.
 3. Set **Full res** to the target resolution (Unreal 2ⁿ+1 presets included).
 4. Press **Generate Full Res**.
-5. Export **PNG16**, **RAW r16** or **EXR**, and optionally the water/slope
+5. Export **PNG16**, **RAW16** or **EXR**, and optionally the water/slope
    masks.
 6. **Save** the configuration if you want to reproduce or tweak it later.
 
@@ -560,7 +560,7 @@ designed to *look* alike, not to be pixel-identical.
 | Format | Typical use |
 | --- | --- |
 | **PNG16** | Importing into tools that read 16-bit grayscale images (Unreal landscape import, Unity, image-based pipelines). |
-| **RAW r16** | Direct file import where the engine expects a bare `uint16` array; pair with the declared W×H. |
+| **RAW16** | Direct file import where the engine expects a bare `uint16` array; pair with the declared W×H. |
 | **EXR** | Float pipelines — Houdini, Blender, compositing — where relative precision across the whole range matters. |
 | **Masks** | Material blending (water vs. land, rock vs. grass) and procedural placement. |
 
@@ -588,7 +588,7 @@ core/compose.py    island and landscape heightmap composition
 core/noise.py      value noise, fbm, ridged noise, island seed hashing
 core/erosion.py    droplet-based hydraulic erosion
 core/smoothing.py  thermal (talus) smoothing and Gaussian blur
-core/export.py     PNG16 / RAW r16 / EXR encoding and sea modes
+core/export.py     PNG16 / RAW16 / EXR encoding and sea modes
 core/masks.py      water and slope mask PNGs
 static/index.html  application markup
 static/app.js      UI state, API client, job polling, config save/load
