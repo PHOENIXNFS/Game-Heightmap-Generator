@@ -621,8 +621,10 @@ MIT — see [LICENSE](LICENSE).
 
 ## 12. UI Images
 <br><br>
-<img width="1858" height="923" alt="image" src="https://github.com/user-attachments/assets/b24a90eb-751a-43fc-bd0f-533ea3e27b6a" />
+<img width="1860" height="914" alt="image" src="https://github.com/user-attachments/assets/81ed2839-018d-4038-86e6-657373b86d94" />
+
 <br><br>
-<img width="1859" height="922" alt="image" src="https://github.com/user-attachments/assets/28c34f3d-f8aa-4a9e-a120-6d9a2f82a425" />
+<img width="1863" height="918" alt="image" src="https://github.com/user-attachments/assets/4d41bb2d-9328-4209-9fe8-82421742015e" />
+
 
 
