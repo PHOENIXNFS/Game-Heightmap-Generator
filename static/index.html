@@ -47,26 +47,20 @@
       <div class="row">
         <label title="Size of the full-resolution heightmap; previews stay at 1024 or below">Full res
           <select id="full-res">
-            <optgroup label="Common">
+            <optgroup label="Resolutions">
               <option value="512">512</option>
               <option value="1024" selected>1024</option>
               <option value="2048">2048</option>
               <option value="4096">4096</option>
-            </optgroup>
-            <optgroup label="Unreal (2^n+1)">
-              <option value="505">505</option>
-              <option value="1009">1009</option>
-              <option value="1017">1017</option>
-              <option value="2017">2017</option>
-              <option value="4033">4033</option>
+              <option value="8192">8192</option>
             </optgroup>
             <option value="__custom">Custom&#8230;</option>
           </select>
         </label>
       </div>
       <div class="row" id="custom-size-row" style="display:none">
-        <label title="Map width in pixels">W <input type="number" id="custom-w" min="64" max="4096" step="1" value="1024"></label>
-        <label title="Map height in pixels">H <input type="number" id="custom-h" min="64" max="4096" step="1" value="1024"></label>
+        <label title="Map width in pixels">W <input type="number" id="custom-w" min="64" max="8192" step="1" value="1024"></label>
+        <label title="Map height in pixels">H <input type="number" id="custom-h" min="64" max="8192" step="1" value="1024"></label>
         <label class="chk" title="Keep width and height equal"><input type="checkbox" id="wh-linked" checked> linked</label>
       </div>
       <div class="row slider-row" id="sea-level-row">

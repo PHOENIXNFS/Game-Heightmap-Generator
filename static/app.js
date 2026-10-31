@@ -103,10 +103,9 @@
   }
 
   /* Full-res dropdown: shortcuts for the exported map size, with a Custom
-     entry that exposes free W/H fields (non-square allowed) so the tool is
-     not tied to Unreal's 2^n+1 sizes. Previews never use it: they are
-     capped at 1024 and rendered at their own size. */
-  var FULL_RES_MAX = 4096;
+     entry that exposes free W/H fields (non-square allowed). Previews never
+     use it: they are capped at 1024 and rendered at their own size. */
+  var FULL_RES_MAX = 8192;
 
   function clampSize(v) {
     return clampInt(v, 64, FULL_RES_MAX, 1024);
@@ -853,8 +852,12 @@
 
   function exportAs(fmt) {
     if (!state.fullId) return;
+    // sea_mode=keep so the exported heights match exactly what the 2D/3D
+    // previews and the stats line show (the raw generated heights). The old
+    // hardcoded "remap" rescaled land to 0..1, landing in engines ~7x taller
+    // than the generator. keep is also the CLI/API default.
     var url = "/api/export/" + state.fullId +
-      "?format=" + fmt + "&sea_mode=remap&scale=1";
+      "?format=" + fmt + "&sea_mode=keep&scale=1";
     fetch(url)
       .then(function (r) {
         if (!r.ok) throw new Error("export failed " + r.status);

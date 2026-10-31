@@ -148,7 +148,7 @@ as you change any control.
 | Control | Range / values | Meaning |
 | --- | --- | --- |
 | **Mode** | `islands` \| `landscape` | Terrain model (see §1). |
-| **Full res** | 512, 1024, 2048, 4096; Unreal presets 505, 1009, 1017, 2017, 4033; or **Custom…** with free W/H | Output resolution. Previews are unaffected. |
+| **Full res** | 512, 1024, 2048, 4096, 8192; or **Custom…** with free W/H | Output resolution. Previews are unaffected. |
 | **Sea level** | 0.000 – 1.000 (default 0.060) | The waterline. Terrain below it is ocean. Hidden in landscape mode, where the sea is forced to `0`. |
 
 ### 4.3 ISLANDS panel
@@ -244,7 +244,7 @@ map's own 99th-percentile slope), so they always agree.
 1. Choose **Mode** and, in Islands mode, place and shape your islands.
 2. Tune the elevation, noise, smoothing and erosion controls while watching
    the previews.
-3. Set **Full res** to the target resolution (Unreal 2ⁿ+1 presets included).
+3. Set **Full res** to the target resolution (or **Custom…** for a free W/H).
 4. Press **Generate Full Res**.
 5. Export **PNG16**, **RAW16** or **EXR**, and optionally the water/slope
    masks.

@@ -590,7 +590,7 @@ def main():
     check("coast stays crenellated after smoothing", d_sm > 1.01,
           f"D={d_sm:.3f}")
 
-    print("== full generation (505, UE preset) ==")
+    print("== full generation (505, custom size) ==")
     t0 = time.time()
     st, _, raw = req("/api/generate", {"config": CONFIG})
     gen = json.loads(raw)
