@@ -630,11 +630,17 @@ MIT — see [LICENSE](LICENSE).
 <img width="1857" height="920" alt="image" src="https://github.com/user-attachments/assets/da375459-3504-4338-ade9-59f56c7bd2f1" />
 
 <br><br>
+Terrain exported for testing
+<br><br>
+<img width="1857" height="922" alt="Screenshot 2026-10-31 202806" src="https://github.com/user-attachments/assets/700b72d2-4f22-4b4e-bcaa-4cc9e3a9e423" />
+
+<br><br>
+Generated Heightmap
+<br><br>
+<img width="4081" height="4081" alt="GameMapTestHeightmap2" src="https://github.com/user-attachments/assets/9fed1142-e2d9-4acd-8902-4bcf99c1e967" />
+
+<br><br>
 Unreal Engine Landscape using Generated Heightmap (4096x4096) [Water is my own water shader]
 <br><br>
-<img width="1919" height="1030" alt="image" src="https://github.com/user-attachments/assets/09e0a439-0501-47e6-8320-2be80adb5b78" />
-
-
-
-
-
+<img width="1919" height="1030" alt="Screenshot 2026-10-31 202746" src="https://github.com/user-attachments/assets/7502830e-5771-4868-984b-58e87f7584f6" />
+<br>
