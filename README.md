@@ -630,7 +630,7 @@ MIT — see [LICENSE](LICENSE).
 <img width="1857" height="920" alt="image" src="https://github.com/user-attachments/assets/da375459-3504-4338-ade9-59f56c7bd2f1" />
 
 <br><br>
-Terrain exported for testing
+Terrain exported for Testing
 <br><br>
 <img width="1857" height="922" alt="Screenshot 2026-10-31 202806" src="https://github.com/user-attachments/assets/700b72d2-4f22-4b4e-bcaa-4cc9e3a9e423" />
 
