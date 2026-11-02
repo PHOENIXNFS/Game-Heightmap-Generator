@@ -24,7 +24,7 @@
       "seed": null,
       "shape_seed": null,
       "terrain_seed": null,
-      "land_height": 0.085,
+      "land_height": 0.045,
       "mountain_height": 0.15,
       "mountain_coverage": 0.2,
       "mountain_size": 1.0,
