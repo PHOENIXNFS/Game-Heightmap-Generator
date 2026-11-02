@@ -2,7 +2,7 @@
   "width": 1024,
   "height": 1024,
   "seed": 1337,
-  "sea_level": 0.06,
+  "sea_level": 0.03,
   "mode": "islands",
   "shape_variety": 0.55,
   "noise": {
