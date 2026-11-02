@@ -183,7 +183,7 @@ a fringed rim).
 
 | Control | Range | `config.noise.*` |
 | --- | --- | --- |
-| Feature size | 0.5 – 20.0 | `scale` — base spatial frequency of the hills. |
+| Feature size | 0.5 – 20.0 | `scale` — base spatial frequency of the hills. In islands mode it scales the island-relative hill spacing: `2.5` (the default) keeps the tuned spacing, lower broadens the hills, higher tightens them. |
 | Terrain detail | 0.00 – 1.00 | `detail_amp` — amplitude of the fine detail. At `0` the lowland is exactly flat. |
 | Coast roughness | 0.00 – 1.00 | `coast_warp` — how far the coastline warps in and out. Islands mode only. |
 | Detail falloff | 0.05 – 0.95 | `persistence` — how quickly finer octaves fade. |

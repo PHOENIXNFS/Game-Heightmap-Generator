@@ -179,6 +179,35 @@ def main():
         sea_level=0.15, edge_margin=0.0)
     check("aspect changes shape", float(np.abs(e1 - e2).max()) > 1e-3)
 
+    # Feature size (noise.scale) and Octaves must reach the island plain:
+    # both were previously fed into a field that was computed and then
+    # discarded, so the sliders did nothing in islands mode.
+    plain_kw = dict(width=256, height=256, seed=7, detail_amp=0.8,
+                    coast_warp=0.3, sea_level=0.15, edge_margin=0.0,
+                    islands=[{"cx": ctr, "cy": ctr, "radius": 0.30,
+                              "angle": 0.4, "land_height": 0.30,
+                              "mountain_height": 0.0}])
+    f_lo = compose_islands(noise_scale=1.0, **plain_kw)
+    f_hi = compose_islands(noise_scale=12.0, **plain_kw)
+    f_diff = float(np.abs(f_lo - f_hi).max())
+    check("feature size changes island plain", f_diff > 0.01, f_diff)
+
+    # Direction: higher feature size = higher spatial frequency, so the
+    # relief inside the island (central box, clear of the coast band)
+    # must steepen. 1.5x threshold against a measured 2.4x.
+    def _igrad(a):
+        c = a[98:158, 98:158]
+        return float(np.abs(np.diff(c, axis=1)).mean()
+                     + np.abs(np.diff(c, axis=0)).mean())
+    g_lo, g_hi = _igrad(f_lo), _igrad(f_hi)
+    check("higher feature size = finer hills", g_hi > g_lo * 1.5,
+          "grad %.5f -> %.5f" % (g_lo, g_hi))
+
+    o_lo = compose_islands(octaves=1, **plain_kw)
+    o_hi = compose_islands(octaves=8, **plain_kw)
+    o_diff = float(np.abs(o_lo - o_hi).max())
+    check("octaves change island plain", o_diff > 0.01, o_diff)
+
     # size control changes land area
     cfg_small = dict(CONFIG, islands=[dict(base, radius=0.12)])
     cfg_big = dict(CONFIG, islands=[dict(base, radius=0.4)])

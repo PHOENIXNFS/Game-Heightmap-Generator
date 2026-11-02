@@ -108,6 +108,11 @@ PLAIN_SWELL = 0.24
 PLAIN_SWELL_FREQ = 0.45
 PLAIN_DROP = 0.35
 PLAIN_FREQ = 1.1
+# noise.scale value that reproduces PLAIN_FREQ (the tuned hill spacing).
+# The Feature size slider scales the hill frequency by scale / REF, so the
+# default keeps the tuned look while other values widen or tighten the
+# hills. Keep in sync with defaults.json noise.scale.
+NOISE_SCALE_REF = 2.5
 # Hollows are made shallower than hills are high (sediment fills basins),
 # which keeps a low plain above the sea without a hard floor that would
 # leave a flat shelf with a crease around it.
@@ -374,7 +379,6 @@ def compose_islands(
     min_dim = min(width, height)
     a = float(np.clip(detail_amp, 0.0, 1.0))
     warp_amp = float(np.clip(coast_warp, 0.0, 1.0))
-    terr_freq = noise_scale / min_dim
 
     active = [
         (i, isl)
@@ -435,7 +439,6 @@ def compose_islands(
         shore_seed = island_seed(shape_seed, 0x5348 + i)
         # Plain relief and mountains belong to the surface: rerolling
         # terrain_seed reshapes them and leaves the outline where it was.
-        terr_seed = island_seed(terrain_seed, 0x7E42 + i)
         plain_seed = island_seed(terrain_seed, 0x504C + i)
         swell_seed = island_seed(terrain_seed, 0x5357 + i)
         mtn_seed = island_seed(terrain_seed, 0x4D4F + i)
@@ -486,7 +489,7 @@ def compose_islands(
         ridge_freq = mtn_freq * RIDGE_FREQ
         spine_freq = mtn_freq * SPINE_FREQ
         clu_freq = mtn_freq * CLUSTER_FREQ
-        plain_freq = PLAIN_FREQ / r_px
+        plain_freq = PLAIN_FREQ * (float(noise_scale) / NOISE_SCALE_REF) / r_px
         swell_freq = PLAIN_SWELL_FREQ / r_px
         shore_freq = SHORE_FREQ / r_px
         want_mtn = peak_h > 1e-6 and cover > 1e-6
@@ -629,8 +632,7 @@ def compose_islands(
             # a slight fall toward the coast (detail_amp scales both, so
             # detail 0 gives an exactly flat plain)
             if want_ripple:
-                t = fbm01(lx * terr_freq, ly * terr_freq, terr_seed, octaves, persistence, lacunarity)
-                p = fbm01(lx * plain_freq, ly * plain_freq, plain_seed, 4, persistence, lacunarity)
+                p = fbm01(lx * plain_freq, ly * plain_freq, plain_seed, octaves, persistence, lacunarity)
                 s = fbm01(lx * swell_freq, ly * swell_freq, swell_seed, 2, persistence, lacunarity)
                 roll = PLAIN_VAR * (2.0 * p - 1.0) + PLAIN_SWELL * (2.0 * s - 1.0)
                 roll = np.where(roll < 0.0, roll * PLAIN_DIP, roll)
