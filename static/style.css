@@ -151,6 +151,11 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .island-seed label { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; }
 .island-seed button { flex: none; }
+.island-guides {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+  color: var(--fg-dim); font-size: 12px; cursor: pointer;
+}
+.island-guides input { cursor: pointer; }
 .island-sub {
   margin: 8px 0 3px; font-size: 10px; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--fg-dim); opacity: 0.8;

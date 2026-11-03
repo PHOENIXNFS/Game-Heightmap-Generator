@@ -30,7 +30,8 @@
       "mountain_size": 1.0,
       "shape_variety": 0.55,
       "coast_slope": 0.5,
-      "enabled": true
+      "enabled": true,
+      "guides": true
     }
   ],
   "landscape": {

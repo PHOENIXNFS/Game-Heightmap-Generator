@@ -200,6 +200,11 @@
       if (typeof isl.coast_slope === "number") {
         isl.coast_slope = Math.min(1, Math.max(0, isl.coast_slope));
       }
+      // 2D guides are view-only. Configs saved before the flag existed (and
+      // any non-boolean value) mean "on", which is how they were saved.
+      if (typeof isl.guides !== "boolean") {
+        isl.guides = defaultOf("guides") !== false;
+      }
     }
   }
 
@@ -361,6 +366,23 @@
 
     card.appendChild(head);
     card.appendChild(pos);
+
+    /* View-only toggle: hide this island's 2D guides (outline, resize and
+       rotate handles, number badge) and lock it against the mouse. It is
+       NOT the enable tick above — that one takes the island out of the
+       map. Generation never reads this flag, so nothing re-renders and
+       the exported heightmap is unchanged. */
+    var guidesRow = document.createElement("label");
+    guidesRow.className = "island-guides";
+    guidesRow.title = "Show this island's outline, handles and number in the 2D preview, and let the mouse drag, resize and rotate it there. Untick for a clean, cursor-locked island — it still generates exactly the same map";
+    var guidesChk = document.createElement("input");
+    guidesChk.type = "checkbox";
+    guidesChk.className = "isl-guides";
+    guidesChk.checked = isl.guides !== false;
+    guidesRow.appendChild(guidesChk);
+    guidesRow.appendChild(document.createTextNode(" 2D guides"));
+    card.appendChild(guidesRow);
+
     card.appendChild(shapeSeedRow.row);
     card.appendChild(terrSeedRow.row);
     card.appendChild(sizeRow.row);
@@ -377,6 +399,11 @@
     chk.addEventListener("change", function () {
       state.config.islands[i].enabled = chk.checked;
       changed();
+    });
+    guidesChk.addEventListener("change", function () {
+      state.config.islands[i].guides = guidesChk.checked;
+      // Overlay only: no re-render, no undo entry, exports stay valid.
+      Preview2D.setConfig(state.config);
     });
     del.addEventListener("click", function () {
       state.config.islands.splice(i, 1);
@@ -580,6 +607,8 @@
       ms.value = String(isl.mountain_size);
       ms.nextElementSibling.textContent = Number(isl.mountain_size).toFixed(2);
     }
+    var gd = card.getElementsByClassName("isl-guides")[0];
+    if (gd) gd.checked = isl.guides !== false;
   }
 
   /* A freshly added island copies the central default island (defaults.json

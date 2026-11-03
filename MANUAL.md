@@ -196,6 +196,13 @@ never disturb another. This is where most of the fun is.
   deleting it. Great for "what does this look like without that one?"
 - **×** (top-right) — delete the island. (If you delete the very last one,
   a fresh default island takes its place so the map is never empty.)
+- **2D guides** (checkbox) — hides this island's blue outline, its drag
+  handles and its number in the 2D preview, and makes it ignore the mouse
+  there, so you can click straight through it. Use it for a clean look or to
+  stop grabbing an island by accident. **It does not change the map** — the
+  island still generates exactly the same shape and still exports the same.
+  To work on a locked island again, click its card in the sidebar (the card
+  controls always work) and tick the box back on.
 
 **Shape and position controls**
 
@@ -231,6 +238,9 @@ never disturb another. This is where most of the fun is.
 - **Drag the orange dot** → rotate.
 - **Click anywhere on the island** → select its card.
 - **Double-click empty water** → add a new island right there.
+
+Islands with **2D guides** unticked are locked against the mouse — their card
+is still the way in.
 
 Islands are always kept fully inside the map frame, so an island can never
 be cut off at the border — dragging stops at the edge on purpose.

@@ -167,6 +167,7 @@ a card to select it; the selected island is highlighted in the 2D preview.
 | **Mountain size** | 0.60 – 2.00 | Breadth of a single massif: scattered hills → one large range. |
 | **Shape seed** | 0 … 2³²−1 | Drives the outline: footprint harmonics, coast warp, shore band and default rotation. Lock it to keep a coastline you like. |
 | **Terrain seed** | 0 … 2³²−1 | Drives the surface: plain relief and mountains (plus the erosion droplets). Reroll it to reshape the land under the same outline. |
+| **2D guides** | checkbox (default on) | Draws this island's outline, resize/rotate handles and number badge in the 2D preview, and lets the mouse drag/resize/rotate it there. Unticking hides the guides *and* makes the island inert to the cursor (select it from its card instead). View-only: generation ignores it, so the map and exports are unchanged and no re-render happens. Independent of the enable tick, which removes the island from the map. |
 
 Both default to the island's own seed, so a config saved before the split
 renders exactly as it did before. A newly added island copies the tool's
@@ -306,6 +307,7 @@ missing, malformed or out-of-range values are replaced or clamped by
 | `shape_variety` | float | 0 – 1 | 0.55 | Footprint variety (see §4.3). |
 | `coast_slope` | float | 0 – 1 | 0.5 | Shore profile: sharp → gentle (see §4.3). |
 | `enabled` | bool | — | `true` | Disabled islands are skipped. |
+| `guides` | bool | — | `true` | View-only: draw this island's interactive lines in the 2D preview and allow mouse editing there. Ignored by generation. |
 
 ### 5.4 `landscape`
 

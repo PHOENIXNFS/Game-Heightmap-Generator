@@ -156,6 +156,10 @@ def normalize_config(cfg):
                 "shape_variety": isl_variety,
                 "coast_slope": coast,
                 "enabled": bool(item.get("enabled", True)),
+                # View-only: the web UI draws this island's interactive
+                # lines (outline, handles, number) on its 2D preview.
+                # Generation never reads it.
+                "guides": bool(item.get("guides", True)),
             }
         )
     if not islands:

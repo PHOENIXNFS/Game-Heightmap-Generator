@@ -279,6 +279,8 @@ window.Preview2D = (function () {
     octx.clearRect(0, 0, overlay.width / view.dpr, overlay.height / view.dpr);
     if (!cfg || cfg.mode !== "islands") return;
     for (var k = 0; k < cfg.islands.length; k++) {
+      // Card checkbox unticked: no outline, handles or number badge.
+      if (cfg.islands[k].guides === false) continue;
       var g = islandGeom(k);
       var p0 = toDisp(g.cx, g.cy);
       var active = cfg.islands[k].enabled;
@@ -332,6 +334,8 @@ window.Preview2D = (function () {
     if (!cfg || cfg.mode !== "islands") return null;
     var TOL = 10;
     for (var k = cfg.islands.length - 1; k >= 0; k--) {
+      // Guides hidden = cursor-locked: no invisible handles to grab or drag.
+      if (cfg.islands[k].guides === false) continue;
       var g = islandGeom(k);
       var p0 = toDisp(g.cx, g.cy);
       // world -> island-local (rotate by -angle)
